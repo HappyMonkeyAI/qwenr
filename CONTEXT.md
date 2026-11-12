@@ -5,6 +5,7 @@
 - Python 3.12+, Starlette/httpx (same shape as chimp, smaller surface).
 - Upstream: Qwen Cloud Token Plan OpenAI-compatible API (Singapore / Global).
 - Client: OpenBot custom provider (and later Qwen Code if desired).
+- License: MIT — Stephen Phillips and HappyMonkeyAI.
 
 ## Rules
 

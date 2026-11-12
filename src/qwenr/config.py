@@ -44,6 +44,8 @@ class Settings:
     sticky_ttl_seconds: float = 1800.0
     economy_lambda: float = 12.0
     free_exhausted_ttl_seconds: float = 3600.0
+    free_affinity_slack: int = 3
+    ledger_path: Path | None = None
     config_path: Path | None = None
 
     # Back-compat alias used by older smoke helpers.
@@ -101,6 +103,8 @@ def load_settings(path: Path) -> Settings:
         sticky_ttl_seconds=float(data.get("sticky_ttl_seconds") or 1800),
         economy_lambda=float(data.get("economy_lambda") or 12.0),
         free_exhausted_ttl_seconds=ttl,
+        free_affinity_slack=int(data.get("free_affinity_slack") if data.get("free_affinity_slack") is not None else 3),
+        ledger_path=_optional_path(data.get("ledger_path") or "placement.ndjson", root),
         config_path=path,
     )
 

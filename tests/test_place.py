@@ -74,3 +74,38 @@ def test_exhausted_free_falls_through_to_token_plan():
 def test_quota_marker_detection():
     assert looks_like_quota_or_billing_block(403, b'{"error":{"message":"Free quota exhausted"}}')
     assert not looks_like_quota_or_billing_block(500, b'{"error":{"message":"internal"}}')
+
+
+def test_free_near_tie_spreads_to_underused():
+    aff = load_affinity()
+    disc = load_discounts()
+    # max-0902 (coord 95) vs max (94) are within default slack=3; heavy usage on 0902
+    # should prefer the underused sibling.
+    chosen = place(
+        "auto:coord",
+        aff,
+        disc,
+        free_first=True,
+        free_candidates=("qwen3.8-max", "qwen3.8-max-0902", "qwen3.8-flash"),
+        free_affinity_slack=3,
+        free_usage={"qwen3.8-max-0902": 10, "qwen3.8-max": 0},
+    )
+    assert chosen.lane == "free"
+    assert chosen.model_id == "qwen3.8-max"
+    assert chosen.reason == "free_quota_spread"
+
+
+def test_free_slack_zero_stays_greedy():
+    aff = load_affinity()
+    disc = load_discounts()
+    chosen = place(
+        "auto:coord",
+        aff,
+        disc,
+        free_first=True,
+        free_candidates=("qwen3.8-max", "qwen3.8-max-0902"),
+        free_affinity_slack=0,
+        free_usage={"qwen3.8-max-0902": 99, "qwen3.8-max": 0},
+    )
+    assert chosen.model_id == "qwen3.8-max-0902"
+    assert chosen.reason == "free_quota"

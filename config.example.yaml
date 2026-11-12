@@ -8,7 +8,11 @@ api_key: ${QWENR_API_KEY:-}
 free_first: true
 payg_allow_paid: false
 free_exhausted_ttl_seconds: 3600
+# Within this affinity gap, prefer underused free models (spread quota).
+free_affinity_slack: 3
 free_models_path: free_models.yaml
+# Append-only placement log (gitignored). Used by /status summary + free spread.
+ledger_path: placement.ndjson
 
 # Singapore PAYG — used ONLY for free_quota lane unless payg_allow_paid: true.
 # Key is typically sk-ws- (not Token Plan sk-sp-).

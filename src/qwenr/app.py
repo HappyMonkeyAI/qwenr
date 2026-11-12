@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -15,6 +17,7 @@ from starlette.routing import Route
 from qwenr import __version__
 from qwenr.config import Settings, UpstreamConfig
 from qwenr.free import looks_like_quota_or_billing_block
+from qwenr.ledger import PlacementLedger
 from qwenr.place import PlaceError, Placement, place
 
 log = logging.getLogger("qwenr")
@@ -27,7 +30,7 @@ def build_app(settings: Settings, client: httpx.AsyncClient | None = None) -> St
         http = client or httpx.AsyncClient(timeout=httpx.Timeout(600.0))
         app.state.settings = settings
         app.state.client = http
-        app.state.decisions: list[dict[str, Any]] = []
+        app.state.ledger = PlacementLedger(path=settings.ledger_path)
         try:
             yield
         finally:
@@ -49,6 +52,7 @@ async def health(request: Request) -> JSONResponse:
 
 async def status(request: Request) -> JSONResponse:
     settings: Settings = request.app.state.settings
+    ledger: PlacementLedger = request.app.state.ledger
     return JSONResponse(
         {
             "service": "qwenr",
@@ -57,11 +61,14 @@ async def status(request: Request) -> JSONResponse:
             "payg": settings.payg.base_url if settings.payg else None,
             "free_first": settings.free_first,
             "payg_allow_paid": settings.payg_allow_paid,
+            "free_affinity_slack": settings.free_affinity_slack,
             # Only models the free lane can actually attempt (needs PAYG key).
             "free_available": list(_free_candidates(settings)),
             "economy_lambda": settings.economy_lambda,
             "night": settings.discounts.is_night(),
-            "recent": list(reversed(request.app.state.decisions[-20:])),
+            "ledger": str(settings.ledger_path) if settings.ledger_path else None,
+            "summary": ledger.summary(),
+            "recent": ledger.recent(20),
         }
     )
 
@@ -80,6 +87,7 @@ async def models(request: Request) -> JSONResponse:
 
 async def chat(request: Request) -> Response:
     settings: Settings = request.app.state.settings
+    ledger: PlacementLedger = request.app.state.ledger
     try:
         payload = await request.json()
     except Exception:
@@ -90,8 +98,9 @@ async def chat(request: Request) -> Response:
     requested = payload.get("model")
     exclude: set[str] = set()
     last_error: Response | None = None
+    attempt = 0
 
-    for _attempt in range(4):
+    for attempt in range(4):
         free_candidates = _free_candidates(settings)
         try:
             placement = place(
@@ -103,13 +112,14 @@ async def chat(request: Request) -> Response:
                 free_candidates=free_candidates,
                 free_first=settings.free_first and bool(free_candidates),
                 exclude=frozenset(exclude),
+                free_affinity_slack=settings.free_affinity_slack,
+                free_usage=ledger.free_usage_counts(),
             )
         except PlaceError as exc:
             if last_error is not None:
                 return last_error
             return _error(exc.status, exc.code, exc.message)
 
-        _remember(request, placement)
         log.info(
             "place %s -> %s lane=%s reason=%s aff=%s cost=%.3f",
             placement.requested,
@@ -126,6 +136,18 @@ async def chat(request: Request) -> Response:
                 # Cannot safely use free lane without PAYG key — skip to Token Plan.
                 settings.free_gate.mark_exhausted(placement.model_id)
                 exclude.add(placement.model_id)
+                ledger.record(
+                    {
+                        "event": "failover",
+                        "ok": False,
+                        "requested": placement.requested,
+                        "model": placement.model_id,
+                        "lane": placement.lane,
+                        "reason": "no_payg_key",
+                        "affinity": placement.affinity,
+                        "attempt": attempt,
+                    }
+                )
                 log.warning("free lane skipped (no PAYG key); falling through to Token Plan")
                 continue
             return _error(
@@ -146,8 +168,29 @@ async def chat(request: Request) -> Response:
 
         body = dict(payload)
         body["model"] = placement.model_id
+        started = time.perf_counter()
         response = await _dispatch(request, upstream, body, placement)
+        latency_ms = int((time.perf_counter() - started) * 1000)
         if response.status_code < 400:
+            usage = _usage_from_response(response)
+            ledger.record(
+                {
+                    "event": "completion",
+                    "ok": True,
+                    "requested": placement.requested,
+                    "model": placement.model_id,
+                    "lane": placement.lane,
+                    "reason": placement.reason,
+                    "affinity": placement.affinity,
+                    "cost_weight": placement.cost_weight,
+                    "score": placement.score,
+                    "status": response.status_code,
+                    "latency_ms": latency_ms,
+                    "usage": usage,
+                    "attempt": attempt,
+                    "stream": bool(payload.get("stream")),
+                }
+            )
             return response
 
         raw = getattr(response, "body", b"") or b""
@@ -155,12 +198,40 @@ async def chat(request: Request) -> Response:
             settings.free_gate.mark_exhausted(placement.model_id)
             exclude.add(placement.model_id)
             last_error = response
+            ledger.record(
+                {
+                    "event": "failover",
+                    "ok": False,
+                    "requested": placement.requested,
+                    "model": placement.model_id,
+                    "lane": placement.lane,
+                    "reason": placement.reason,
+                    "affinity": placement.affinity,
+                    "status": response.status_code,
+                    "latency_ms": latency_ms,
+                    "attempt": attempt,
+                }
+            )
             log.warning(
                 "free quota/billing block on %s (%s); failing over to Token Plan",
                 placement.model_id,
                 response.status_code,
             )
             continue
+        ledger.record(
+            {
+                "event": "error",
+                "ok": False,
+                "requested": placement.requested,
+                "model": placement.model_id,
+                "lane": placement.lane,
+                "reason": placement.reason,
+                "affinity": placement.affinity,
+                "status": response.status_code,
+                "latency_ms": latency_ms,
+                "attempt": attempt,
+            }
+        )
         return response
 
     return last_error or _error(502, "upstream_unavailable", "No upstream could serve the request.")
@@ -181,18 +252,27 @@ def _upstream_for(settings: Settings, placement: Placement) -> UpstreamConfig | 
     return settings.token_plan
 
 
-def _remember(request: Request, placement: Placement) -> None:
-    request.app.state.decisions.append(
-        {
-            "requested": placement.requested,
-            "model": placement.model_id,
-            "lane": placement.lane,
-            "reason": placement.reason,
-            "affinity": placement.affinity,
-            "cost_weight": placement.cost_weight,
-            "score": placement.score,
-        }
-    )
+def _usage_from_response(response: Response) -> dict[str, int] | None:
+    if isinstance(response, StreamingResponse):
+        return None
+    raw = getattr(response, "body", b"") or b""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    usage = data.get("usage") if isinstance(data, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    out: dict[str, int] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        if key in usage and usage[key] is not None:
+            try:
+                out[key] = int(usage[key])
+            except (TypeError, ValueError):
+                continue
+    return out or None
 
 
 async def _dispatch(
