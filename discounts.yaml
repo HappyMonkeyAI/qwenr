@@ -1,0 +1,57 @@
+# Time-sensitive Credit multipliers for Token Plan (hand-maintained from docs).
+# effective_cost = base_weight * multiplier  (lower is cheaper)
+# Refresh when QwenCloud changes promos. Night window is UTC+8.
+
+version: 1
+timezone: Asia/Shanghai  # UTC+8
+night:
+  start: "22:00"
+  end: "08:00"
+
+# Relative Credit weights when no promo (flash < plus < max < preview-max).
+# Absolute Credits/token are not fully published; these are ordinal.
+base_weight:
+  qwen3.6-flash: 1.0
+  qwen3.8-flash: 1.2
+  deepseek-v4-flash-0731: 1.2
+  deepseek-v4.1-flash: 1.25
+  deepseek-v4.1-flash-1017: 1.25
+  qwen3.7-plus: 2.0
+  glm-5.2: 2.2
+  glm-5.3: 2.4
+  deepseek-v4-pro: 2.6
+  deepseek-v4-pro-0813: 2.6
+  qwen3.7-max: 3.0
+  qwen3.8-max: 3.2
+  qwen4-max-preview: 4.0
+
+# Multipliers applied to base_weight (1.0 = full Credits).
+promos:
+  - id: qwen4-preview-day
+    models: [qwen4-max-preview]
+    multiplier: 0.20
+    until: "2026-11-25T24:00:00+08:00"
+    notes: "Limited preview: Credits as low as 20% of standard."
+
+  - id: qwen4-preview-night
+    models: [qwen4-max-preview]
+    when: night
+    multiplier: 0.08
+    until: "2026-11-25T24:00:00+08:00"
+    notes: "Preview + night stack ≈ 8% of standard."
+
+  - id: qwen38-night
+    models: [qwen3.8-max, qwen3.8-flash]
+    when: night
+    multiplier: 0.40
+    notes: "60% off → pay 40%."
+
+  - id: deepseek-night
+    models:
+      - deepseek-v4-pro-0813
+      - deepseek-v4-flash-0731
+      - deepseek-v4.1-flash
+      - deepseek-v4.1-flash-1017
+    when: night
+    multiplier: 0.50
+    notes: "50% off Credits."

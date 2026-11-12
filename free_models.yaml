@@ -1,0 +1,20 @@
+# Singapore PAYG free-quota candidates (marketplace ?free=1 text/chat slice).
+# qwenr only uses these on the PAYG upstream while free_first is on AND the
+# model is not marked exhausted. Exhausted → Token Plan. Never silent PAYG paid
+# unless payg_allow_paid: true (default false).
+#
+# Refresh from https://www.qwencloud.com/models?region=ap-southeast-1&free=1
+# and console Free Tier remaining balances. Exact ids only.
+
+version: 1
+models:
+  - qwen3.8-max
+  - qwen3.8-max-0902
+  - qwen3.8-flash
+  - glm-5.3
+  - deepseek-v4.1-flash
+  - kimi-k3
+  - kimi-k3.1-pro
+  # open-weight / niche — keep listed but affinity may score low
+  - qwen3.8-2.4t-a95b
+  - qwen3.8-omni-flash

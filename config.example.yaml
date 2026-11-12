@@ -1,0 +1,43 @@
+# Copy to config.yaml (gitignored). Secrets via ${ENV:-}.
+
+# Use 8788 while chimp owns 8787; for OpenBot drop-swap, stop chimp and set 8787.
+listen: 127.0.0.1:8788
+api_key: ${QWENR_API_KEY:-}
+
+# Safety: free Singapore PAYG quota first; never silent PAYG paid overrun.
+free_first: true
+payg_allow_paid: false
+free_exhausted_ttl_seconds: 3600
+free_models_path: free_models.yaml
+
+# Singapore PAYG — used ONLY for free_quota lane unless payg_allow_paid: true.
+# Key is typically sk-ws- (not Token Plan sk-sp-).
+payg:
+  base_url: ${QWEN_PAYG_BASE_URL:-https://ap-southeast-1.maas.qwencloudapi.com/compatible-mode/v1}
+  api_key: ${QWEN_PAYG_API_KEY:-}
+
+# Token Plan Credits — sk-sp- key. Used when free lane is empty/exhausted.
+token_plan:
+  base_url: ${QWEN_TOKEN_PLAN_BASE_URL:-https://token-plan.maas.qwencloudapi.com/compatible-mode/v1}
+  api_key: ${QWEN_TOKEN_PLAN_API_KEY:-}
+  prefer_platform_auto: false
+
+sticky: true
+sticky_ttl_seconds: 1800
+economy_lambda: 12.0
+
+models_path: models.yaml
+discounts_path: discounts.yaml
+
+aliases:
+  auto: { models: [] }
+  auto:coder: { models: [] }
+  auto:ops: { models: [] }
+  auto:research: { models: [] }
+  auto:writer: { models: [] }
+  auto:design: { models: [] }
+  auto:qa: { models: [] }
+  auto:docs: { models: [] }
+  auto:skills: { models: [] }
+  auto:assistant: { models: [] }
+  auto:coord: { models: [] }

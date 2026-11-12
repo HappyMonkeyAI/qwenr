@@ -1,0 +1,73 @@
+# Draft affinity for Token Plan Individual text models × OpenBot classes.
+# Scores 0–100. Exact model ids only (Token Plan allowlist).
+# Economy is applied separately via discounts.yaml + λ in place().
+
+version: 1
+
+models:
+  - id: qwen4-max-preview
+    roles: { auto: 96, coord: 98, coder: 92, research: 95, writer: 88, ops: 85, assistant: 90, skills: 88, docs: 80, qa: 78, design: 75 }
+    notes: "Token Plan only; preview promo — prefer when strength matters and Credits promo is on."
+
+  - id: qwen3.8-max
+    roles: { auto: 92, coord: 94, coder: 90, research: 92, writer: 86, ops: 88, assistant: 88, skills: 90, docs: 82, qa: 80, design: 78 }
+    notes: "Default strong generalist; night 60% off. Often on Singapore free quota."
+
+  - id: qwen3.8-max-0902
+    roles: { auto: 93, coord: 95, coder: 92, research: 93, writer: 86, ops: 88, assistant: 88, skills: 90, docs: 82, qa: 80, design: 78 }
+    notes: "Snapshot of qwen3.8-max; separate free-quota bucket."
+
+  - id: qwen3.8-flash
+    roles: { auto: 78, coord: 70, coder: 72, research: 70, writer: 75, ops: 80, assistant: 85, skills: 82, docs: 78, qa: 88, design: 70, triage: 90 }
+    notes: "Fast/cheap default; night 60% off — good for triage/qa/high-chatter desks."
+
+  - id: qwen3.7-max
+    roles: { auto: 88, coord: 90, coder: 86, research: 90, writer: 84, ops: 82, assistant: 85, skills: 84, docs: 80, qa: 75 }
+    notes: "Text-strong; no vision in Token Plan table."
+
+  - id: qwen3.7-plus
+    roles: { auto: 82, coord: 80, coder: 78, research: 80, writer: 88, ops: 78, assistant: 86, skills: 80, docs: 90, qa: 78, design: 82 }
+    notes: "Balanced + vision; docs/writer friendly."
+
+  - id: qwen3.6-flash
+    roles: { auto: 70, coord: 60, coder: 65, research: 62, writer: 70, ops: 72, assistant: 80, skills: 75, docs: 72, qa: 85, triage: 92 }
+    notes: "Cheapest Qwen flash tier for noisy/low-stakes turns."
+
+  - id: deepseek-v4-pro
+    roles: { auto: 86, coord: 84, coder: 88, research: 90, writer: 78, ops: 80, assistant: 78, skills: 82, docs: 75, qa: 78 }
+    notes: "Strong reasoning/coding alternative."
+
+  - id: deepseek-v4-pro-0813
+    roles: { auto: 86, coord: 84, coder: 88, research: 90, writer: 78, ops: 80, assistant: 78, skills: 82, docs: 75, qa: 78 }
+    notes: "Night 50% off (promo)."
+
+  - id: deepseek-v4-flash-0731
+    roles: { auto: 72, coord: 65, coder: 70, research: 68, writer: 68, ops: 75, assistant: 78, skills: 75, qa: 85, triage: 88 }
+    notes: "Night 50% off (promo)."
+
+  - id: deepseek-v4.1-flash
+    roles: { auto: 74, coord: 66, coder: 72, research: 70, writer: 70, ops: 76, assistant: 80, skills: 76, qa: 86, triage: 88, design: 72 }
+    notes: "Vision flash; night 50% off (promo)."
+
+  - id: deepseek-v4.1-flash-1017
+    roles: { auto: 74, coord: 66, coder: 72, research: 70, writer: 70, ops: 76, assistant: 80, skills: 76, qa: 86, triage: 88, design: 72 }
+    notes: "Vision flash; night 50% off (promo)."
+
+  - id: glm-5.3
+    roles: { auto: 80, coord: 78, coder: 82, research: 82, writer: 80, ops: 78, assistant: 80, skills: 78, docs: 82, qa: 78 }
+    notes: "Zhipu strong text."
+
+  - id: glm-5.2
+    roles: { auto: 76, coord: 74, coder: 78, research: 78, writer: 78, ops: 76, assistant: 78, skills: 76, docs: 80, qa: 76 }
+    notes: "Slightly lighter GLM."
+
+  - id: kimi-k3
+    roles: { auto: 90, coord: 92, coder: 94, research: 92, writer: 84, ops: 86, assistant: 86, skills: 88, docs: 80, qa: 78, design: 75 }
+    notes: "Strong long-horizon / coding; often on free marketplace filter."
+
+  - id: kimi-k3.1-pro
+    roles: { auto: 91, coord: 93, coder: 95, research: 93, writer: 84, ops: 86, assistant: 86, skills: 88, docs: 80, qa: 78, design: 75 }
+    notes: "Kimi pro variant when listed on free tier."
+
+# Platform auto — pass-through option if operator wants Qwen's own router.
+passthrough_auto: auto
