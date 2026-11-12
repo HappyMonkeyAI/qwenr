@@ -91,12 +91,25 @@ Response headers: `x-qwenr-model`, `x-qwenr-lane` (`free` | `token_plan`), `x-qw
 
 Role aliases: `auto`, `auto:coder`, `auto:ops`, `auto:research`, `auto:writer`, `auto:design`, `auto:qa`, `auto:docs`, `auto:skills`, `auto:assistant`, `auto:coord`.
 
-## Operator notes
+## Operator checklist
+
+Before putting OpenBot on qwenr:
+
+1. **Keys** — `.env` has `sk-sp-` (Token Plan) and preferably `sk-ws-` (Singapore PAYG free lane). Never commit `.env` / `config.yaml`.
+2. **Port** — Drop-swap uses `:8787`; otherwise keep `:8788` while chimp owns 8787. Only one process should listen.
+3. **Free catalog** — Refresh `free_models.yaml` from the [Singapore free models](https://www.qwencloud.com/models?region=ap-southeast-1&free=1) list; ids must be exact.
+4. **Safety** — Leave `payg_allow_paid: false` unless you intentionally accept paid PAYG after free is gone.
+5. **Health** — `GET /health` → ok; `GET /status` → both upstreams listed, `free_first: true`.
+6. **Smoke** — `auto:coord` plus `auto:coder` (and ideally `auto:qa`); confirm `x-qwenr-lane` and `/status` `summary`.
+7. **Quota eyes** — After a session, read `/status` `summary` / `placement.ndjson`. Check remaining free quota in the Singapore console Free Tier page, or `qwencloud usage free-tier --format json` if the [QwenCloud CLI](https://docs.qwencloud.com/api-reference/preparation/cli) is installed. qwenr does not yet poll remaining balances live (reactive exhaustion only).
+8. **ToS** — Token Plan is for **interactive** use inside programming/agent tools — not unattended batch/swarm scrapers. OpenBot as a human-driven harness is the intended shape.
+
+### Operator notes
 
 - Exact model-id allowlist — no fuzzy versions ([Token Plan Individual](https://docs.qwencloud.com/token-plan/personal/token-plan-personal-overview)).
 - Night window **22:00–08:00 UTC+8**: e.g. `qwen3.8-max` / `qwen3.8-flash` often 60% off Credits; some DeepSeek ids 50% off (see `discounts.yaml`).
 - `qwen4-max-preview`: Token Plan only (not free-lane).
-- **ToS:** Token Plan is for interactive use inside programming/agent tools — not unattended batch backends. Treat OpenBot as an interactive harness.
+- Free quota is Singapore-only, per-model, and separate from Token Plan Credits ([Free quota](https://docs.qwencloud.com/resources/free-quota)).
 
 ## Develop
 
