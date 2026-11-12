@@ -1,0 +1,44 @@
+{
+  "free_tier": [
+    {
+      "model_id": "qwen3.8-flash",
+      "quota": {
+        "remaining": 900000,
+        "total": 1000000,
+        "unit": "tokens",
+        "used_pct": 10,
+        "status": "valid"
+      }
+    },
+    {
+      "model_id": "kimi-k3.1-pro",
+      "quota": {
+        "remaining": 0,
+        "total": 1000000,
+        "unit": "tokens",
+        "used_pct": 100,
+        "status": "exhaust"
+      }
+    },
+    {
+      "model_id": "qwen3.8-max",
+      "quota": {
+        "remaining": 1000000,
+        "total": 1000000,
+        "unit": "tokens",
+        "used_pct": 0,
+        "status": "expire"
+      }
+    },
+    {
+      "model_id": "glm-5.3",
+      "quota": {
+        "remaining": 1000000,
+        "total": 1000000,
+        "unit": "tokens",
+        "used_pct": 0,
+        "status": "valid"
+      }
+    }
+  ]
+}

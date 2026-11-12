@@ -14,6 +14,14 @@ free_models_path: free_models.yaml
 # Append-only placement log (gitignored). Used by /status summary + free spread.
 ledger_path: placement.ndjson
 
+# Live free-tier sync via QwenCloud CLI (`qwencloud auth login` once).
+# Blocks exhaust/expire/remaining=0 before free-lane calls. Fails open on CLI errors
+# (keeps last successful blocks). Optional snapshot for airgap/tests.
+free_tier_sync: true
+free_tier_sync_ttl_seconds: 300
+free_tier_sync_command: qwencloud
+# free_tier_snapshot_path: tests/fixtures/free_tier.json
+
 # Singapore PAYG — used ONLY for free_quota lane unless payg_allow_paid: true.
 # Key is typically sk-ws- (not Token Plan sk-sp-).
 payg:

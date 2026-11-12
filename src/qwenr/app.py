@@ -17,6 +17,7 @@ from starlette.routing import Route
 from qwenr import __version__
 from qwenr.config import Settings, UpstreamConfig
 from qwenr.free import looks_like_quota_or_billing_block
+from qwenr.free_sync import sync_free_tier
 from qwenr.ledger import PlacementLedger
 from qwenr.place import PlaceError, Placement, place
 
@@ -31,6 +32,14 @@ def build_app(settings: Settings, client: httpx.AsyncClient | None = None) -> St
         app.state.settings = settings
         app.state.client = http
         app.state.ledger = PlacementLedger(path=settings.ledger_path)
+        if settings.free_tier_sync:
+            result = sync_free_tier(
+                settings.free_gate,
+                command=settings.free_tier_sync_command,
+                snapshot_path=settings.free_tier_snapshot_path,
+            )
+            if not result.ok:
+                log.warning("free-tier sync failed at startup: %s", result.error)
         try:
             yield
         finally:
@@ -64,6 +73,7 @@ async def status(request: Request) -> JSONResponse:
             "free_affinity_slack": settings.free_affinity_slack,
             # Only models the free lane can actually attempt (needs PAYG key).
             "free_available": list(_free_candidates(settings)),
+            "free_tier_sync": settings.free_gate.sync_status(),
             "economy_lambda": settings.economy_lambda,
             "night": settings.discounts.is_night(),
             "ledger": str(settings.ledger_path) if settings.ledger_path else None,
@@ -242,8 +252,25 @@ def _free_candidates(settings: Settings) -> tuple[str, ...]:
         return ()
     if settings.payg is None or not settings.payg.api_key:
         return ()
+    _maybe_refresh_free_tier(settings)
     # Without payg_allow_paid we only ever hit PAYG for free lane — good.
     return settings.free_gate.available()
+
+
+def _maybe_refresh_free_tier(settings: Settings) -> None:
+    if not settings.free_tier_sync:
+        return
+    meta = settings.free_gate.sync_status()
+    synced_at = meta.get("synced_at")
+    if isinstance(synced_at, (int, float)) and (time.time() - float(synced_at)) < settings.free_tier_sync_ttl_seconds:
+        return
+    result = sync_free_tier(
+        settings.free_gate,
+        command=settings.free_tier_sync_command,
+        snapshot_path=settings.free_tier_snapshot_path,
+    )
+    if not result.ok:
+        log.warning("free-tier sync refresh failed: %s", result.error)
 
 
 def _upstream_for(settings: Settings, placement: Placement) -> UpstreamConfig | None:

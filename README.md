@@ -101,7 +101,7 @@ Before putting OpenBot on qwenr:
 4. **Safety** — Leave `payg_allow_paid: false` unless you intentionally accept paid PAYG after free is gone.
 5. **Health** — `GET /health` → ok; `GET /status` → both upstreams listed, `free_first: true`.
 6. **Smoke** — `auto:coord` plus `auto:coder` (and ideally `auto:qa`); confirm `x-qwenr-lane` and `/status` `summary`.
-7. **Quota eyes** — After a session, read `/status` `summary` / `placement.ndjson`. Check remaining free quota in the Singapore console Free Tier page, or `qwencloud usage free-tier --format json` if the [QwenCloud CLI](https://docs.qwencloud.com/api-reference/preparation/cli) is installed. qwenr does not yet poll remaining balances live (reactive exhaustion only).
+7. **Quota eyes** — Install [QwenCloud CLI](https://docs.qwencloud.com/api-reference/preparation/cli) (`npm i -g @qwencloud/qwencloud-cli`) and run `qwencloud auth login` once. With `free_tier_sync: true` (default), qwenr calls `qwencloud usage free-tier` on startup / TTL refresh and skips **exhaust** / **expire** / zero-remaining free ids before calling them. `/status.free_tier_sync` shows the last sync. Also keep an eye on `/status` `summary` / `placement.ndjson`.
 8. **ToS** — Token Plan is for **interactive** use inside programming/agent tools — not unattended batch/swarm scrapers. OpenBot as a human-driven harness is the intended shape.
 
 ### Operator notes

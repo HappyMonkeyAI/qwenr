@@ -46,6 +46,10 @@ class Settings:
     free_exhausted_ttl_seconds: float = 3600.0
     free_affinity_slack: int = 3
     ledger_path: Path | None = None
+    free_tier_sync: bool = True
+    free_tier_sync_ttl_seconds: float = 300.0
+    free_tier_sync_command: str = "qwencloud"
+    free_tier_snapshot_path: Path | None = None
     config_path: Path | None = None
 
     # Back-compat alias used by older smoke helpers.
@@ -105,6 +109,10 @@ def load_settings(path: Path) -> Settings:
         free_exhausted_ttl_seconds=ttl,
         free_affinity_slack=int(data.get("free_affinity_slack") if data.get("free_affinity_slack") is not None else 3),
         ledger_path=_optional_path(data.get("ledger_path") or "placement.ndjson", root),
+        free_tier_sync=True if data.get("free_tier_sync") is None else bool(data.get("free_tier_sync")),
+        free_tier_sync_ttl_seconds=float(data.get("free_tier_sync_ttl_seconds") or 300),
+        free_tier_sync_command=str(data.get("free_tier_sync_command") or "qwencloud").strip() or "qwencloud",
+        free_tier_snapshot_path=_optional_path(data.get("free_tier_snapshot_path"), root),
         config_path=path,
     )
 
