@@ -43,7 +43,8 @@ export function readScalar(text, key) {
 export function setScalar(text, key, value) {
   const line = `${key}: ${value}`;
   const pattern = new RegExp(`^${key}:.*$`, "m");
-  if (pattern.test(text)) return text.replace(pattern, line);
+  // Function replacement: a string would interpret $&, $' and $` in the value.
+  if (pattern.test(text)) return text.replace(pattern, () => line);
   return `${line}\n${text}`;
 }
 
@@ -61,7 +62,7 @@ export function parseEnv(text) {
 export function upsertEnv(text, key, value) {
   const line = `${key}=${value}`;
   const pattern = new RegExp(`^${key}=.*$`, "m");
-  if (pattern.test(text)) return text.replace(pattern, line);
+  if (pattern.test(text)) return text.replace(pattern, () => line);
   const base = String(text || "");
   const sep = base.endsWith("\n") || base.length === 0 ? "" : "\n";
   return `${base}${sep}${line}\n`;
@@ -87,13 +88,19 @@ export function readRouterApiKey(root) {
   return String(process.env.QWENR_API_KEY || fromFile || "").replace(/^["']|["']$/g, "").trim();
 }
 
-export function loadOperatorView(root) {
+// Call once at startup. loadOperatorView runs on every refresh and must not write.
+export function ensureConfig(root) {
   const configPath = path.join(root, "config.yaml");
   const examplePath = path.join(root, "config.example.yaml");
-  const envPath = path.join(root, ".env");
   if (!fs.existsSync(configPath) && fs.existsSync(examplePath)) {
     fs.copyFileSync(examplePath, configPath);
   }
+  return configPath;
+}
+
+export function loadOperatorView(root) {
+  const configPath = path.join(root, "config.yaml");
+  const envPath = path.join(root, ".env");
   const configText = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
   const envText = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : "";
   const env = parseEnv(envText);
@@ -113,6 +120,11 @@ export function loadOperatorView(root) {
 }
 
 export function saveOperatorSettings(root, patch) {
+  // Validate everything before writing anything. A newline in a key would
+  // inject extra lines into .env.
+  for (const field of ["tokenPlanKey", "paygKey"]) {
+    if (/[\r\n]/.test(String(patch[field] || ""))) throw new Error("API keys must be a single line");
+  }
   const view = loadOperatorView(root);
   const listen = assertListenAllowed(patch.listenHost ?? view.listenHost, patch.listenPort ?? view.listenPort, {
     allowLan: Boolean(patch.allowLan),

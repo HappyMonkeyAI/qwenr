@@ -20,10 +20,10 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from qwenr import __version__
 from qwenr.config import Settings, UpstreamConfig
-from qwenr.free import looks_like_quota_or_billing_block
+from qwenr.free import matched_quota_marker
 from qwenr.free_sync import sync_free_tier
 from qwenr.ledger import PlacementLedger
-from qwenr.place import PlaceError, Placement, place
+from qwenr.place import ROLE_ALIASES, SKIP_PREFIXES, PlaceError, Placement, place
 
 log = logging.getLogger("qwenr")
 
@@ -111,10 +111,10 @@ async def status(request: Request) -> JSONResponse:
 
 async def models(request: Request) -> JSONResponse:
     settings: Settings = request.app.state.settings
-    data = [{"id": mid, "object": "model", "owned_by": "qwenr"} for mid in _alias_ids()]
+    data = [{"id": mid, "object": "model", "owned_by": "qwenr"} for mid in ROLE_ALIASES]
     free = set(settings.free_gate.available())
     for mid in settings.affinity.model_ids():
-        if mid == "auto" or mid.startswith(("qwen-image", "qwen-audio", "wan", "happyhorse")):
+        if mid == "auto" or mid.startswith(SKIP_PREFIXES):
             continue
         owner = "free-quota" if mid in free else "token-plan"
         data.append({"id": mid, "object": "model", "owned_by": owner})
@@ -124,8 +124,15 @@ async def models(request: Request) -> JSONResponse:
 async def chat(request: Request) -> Response:
     settings: Settings = request.app.state.settings
     ledger: PlacementLedger = request.app.state.ledger
+    raw_body = await _read_body_limited(request, settings.max_request_bytes)
+    if raw_body is None:
+        return _error(
+            413,
+            "request_too_large",
+            f"Request body exceeds {settings.max_request_bytes} bytes (max_request_bytes).",
+        )
     try:
-        payload = await request.json()
+        payload = json.loads(raw_body)
     except Exception:
         return _error(400, "invalid_json", "Request body must be JSON.")
     if not isinstance(payload, dict):
@@ -179,7 +186,7 @@ async def chat(request: Request) -> Response:
                 # Cannot safely use free lane without PAYG key — skip to Token Plan.
                 settings.free_gate.mark_exhausted(placement.model_id)
                 free_exclude.add(placement.model_id)
-                ledger.record(
+                await ledger.arecord(
                     {
                         "event": "failover",
                         "ok": False,
@@ -216,7 +223,7 @@ async def chat(request: Request) -> Response:
         latency_ms = int((time.perf_counter() - started) * 1000)
         if response.status_code < 400:
             usage = _usage_from_response(response)
-            ledger.record(
+            await ledger.arecord(
                 {
                     "event": "completion",
                     "ok": True,
@@ -237,11 +244,12 @@ async def chat(request: Request) -> Response:
             return response
 
         raw = getattr(response, "body", b"") or b""
-        if placement.lane == "free" and looks_like_quota_or_billing_block(response.status_code, raw):
+        marker = matched_quota_marker(response.status_code, raw) if placement.lane == "free" else None
+        if marker is not None:
             settings.free_gate.mark_exhausted(placement.model_id)
             free_exclude.add(placement.model_id)
             last_error = response
-            ledger.record(
+            await ledger.arecord(
                 {
                     "event": "failover",
                     "ok": False,
@@ -253,15 +261,17 @@ async def chat(request: Request) -> Response:
                     "status": response.status_code,
                     "latency_ms": latency_ms,
                     "attempt": attempt,
+                    "marker": marker,
                 }
             )
             log.warning(
-                "free quota/billing block on %s (%s); failing over to Token Plan",
+                "free quota/billing block on %s (%s, marker=%r); failing over to Token Plan",
                 placement.model_id,
                 response.status_code,
+                marker,
             )
             continue
-        ledger.record(
+        await ledger.arecord(
             {
                 "event": "error",
                 "ok": False,
@@ -278,6 +288,21 @@ async def chat(request: Request) -> Response:
         return response
 
     return last_error or _error(502, "upstream_unavailable", "No upstream could serve the request.")
+
+
+async def _read_body_limited(request: Request, limit: int) -> bytes | None:
+    """Read the request body, or None if it exceeds `limit` bytes (checked before buffering)."""
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > limit:
+        return None
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _free_candidates(settings: Settings) -> tuple[str, ...]:
@@ -433,22 +458,6 @@ class _UpstreamStreamingResponse(StreamingResponse):
             await super().__call__(scope, receive, send)
         finally:
             await self._upstream.aclose()  # idempotent
-
-
-def _alias_ids() -> list[str]:
-    return [
-        "auto",
-        "auto:coder",
-        "auto:ops",
-        "auto:research",
-        "auto:writer",
-        "auto:design",
-        "auto:qa",
-        "auto:docs",
-        "auto:skills",
-        "auto:assistant",
-        "auto:coord",
-    ]
 
 
 def _placement_headers(placement: Placement) -> dict[str, str]:

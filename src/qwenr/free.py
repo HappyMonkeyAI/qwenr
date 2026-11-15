@@ -67,11 +67,6 @@ class FreeQuotaGate:
     def mark_exhausted(self, model_id: str) -> None:
         self._exhausted_until[model_id] = time.time() + self.ttl_seconds
 
-    def is_exhausted(self, model_id: str) -> bool:
-        if model_id in self._sync_blocked:
-            return True
-        return self._exhausted_until.get(model_id, 0) > time.time()
-
     def apply_sync_blocks(
         self,
         blocked: dict[str, str],
@@ -118,8 +113,17 @@ def load_free_models(path: Path | None = None) -> frozenset[str]:
     return frozenset(str(item).strip() for item in models if str(item).strip())
 
 
-def looks_like_quota_or_billing_block(status_code: int, body: bytes) -> bool:
+def matched_quota_marker(status_code: int, body: bytes) -> str | None:
+    """Which marker made this a quota/billing block (None if it isn't one).
+
+    Logged on failover so a revoked key ("access denied") can be told apart
+    from a genuinely spent free quota.
+    """
     if status_code not in {400, 401, 402, 403, 429, 503}:
-        return False
+        return None
     text = body.decode("utf-8", errors="ignore").casefold()
-    return any(marker in text for marker in QUOTA_EXHAUSTED_MARKERS)
+    return next((marker for marker in QUOTA_EXHAUSTED_MARKERS if marker in text), None)
+
+
+def looks_like_quota_or_billing_block(status_code: int, body: bytes) -> bool:
+    return matched_quota_marker(status_code, body) is not None

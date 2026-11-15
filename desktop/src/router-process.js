@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+const STOP_TIMEOUT_MS = 5000;
+
 export function pythonCommand(root) {
   const win = path.join(root, ".venv", "Scripts", "python.exe");
   const nix = path.join(root, ".venv", "bin", "python");
@@ -18,8 +20,11 @@ export function pythonArgs(command) {
 }
 
 export class RouterProcess {
-  constructor(root) {
+  constructor(root, { spawnImpl = spawn, logPath = path.join(root, "router.log"), platform = process.platform } = {}) {
     this.root = root;
+    this.spawnImpl = spawnImpl;
+    this.logPath = logPath;
+    this.platform = platform;
     this.child = null;
     this.lastError = "";
   }
@@ -31,17 +36,27 @@ export class RouterProcess {
   start() {
     if (this.owned) return { started: false, reason: "already-owned" };
     const command = pythonCommand(this.root);
-    const child = spawn(command, pythonArgs(command), {
-      cwd: this.root,
-      env: { ...process.env, PYTHONPATH: "src" },
-      windowsHide: true,
-      stdio: "ignore",
-    });
+    // Router stdout/stderr go to a log so start failures are diagnosable.
+    fs.mkdirSync(path.dirname(this.logPath), { recursive: true });
+    const logFd = fs.openSync(this.logPath, "a");
+    let child;
+    try {
+      child = this.spawnImpl(command, pythonArgs(command), {
+        cwd: this.root,
+        env: { ...process.env, PYTHONPATH: "src" },
+        windowsHide: true,
+        stdio: ["ignore", logFd, logFd],
+      });
+    } finally {
+      fs.closeSync(logFd); // the child holds its own copy
+    }
     this.child = child;
     this.lastError = "";
     child.on("exit", (code, signal) => {
       if (this.child === child) this.child = null;
-      if (code && code !== 0) this.lastError = `router exited ${code}${signal ? ` ${signal}` : ""}`;
+      if (code && code !== 0) {
+        this.lastError = `router exited ${code}${signal ? ` ${signal}` : ""} (see ${this.logPath})`;
+      }
     });
     child.on("error", (error) => {
       this.lastError = error.message;
@@ -50,18 +65,29 @@ export class RouterProcess {
     return { started: true, pid: child.pid };
   }
 
+  // Resolves once the process has exited (or after a timeout), so a following
+  // start() doesn't race the old process for the port.
   stop() {
     const child = this.child;
-    if (!child || child.exitCode !== null) {
-      this.child = null;
-      return { stopped: false };
-    }
-    if (process.platform === "win32") {
-      spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    this.child = null;
+    if (!child || child.exitCode !== null) return Promise.resolve({ stopped: false });
+    const exited = new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ stopped: true, timedOut: true }), STOP_TIMEOUT_MS);
+      child.once("exit", () => {
+        clearTimeout(timer);
+        resolve({ stopped: true });
+      });
+    });
+    if (this.platform === "win32") {
+      this.spawnImpl("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
     } else {
       child.kill();
     }
-    this.child = null;
-    return { stopped: true };
+    return exited;
+  }
+
+  async restart() {
+    await this.stop();
+    return this.start();
   }
 }

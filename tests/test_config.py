@@ -37,7 +37,7 @@ def test_env_templated_true_is_true(tmp_path: Path, monkeypatch):
     assert s.payg_allow_paid is True
 
 
-@pytest.mark.parametrize("key", ["free_first", "token_plan_only", "free_tier_sync", "sticky"])
+@pytest.mark.parametrize("key", ["free_first", "token_plan_only", "free_tier_sync"])
 def test_string_false_parses_false_for_every_flag(tmp_path: Path, key: str):
     s = load_settings(write_config(tmp_path, f"{key}: 'false'\n"))
     assert getattr(s, key) is False
@@ -62,14 +62,12 @@ def test_zero_numbers_are_respected(tmp_path: Path):
     s = load_settings(
         write_config(
             tmp_path,
-            "economy_lambda: 0\nfree_tier_sync_ttl_seconds: 0\nfree_exhausted_ttl_seconds: 0\nsticky_ttl_seconds: 0\n",
+            "economy_lambda: 0\nfree_tier_sync_ttl_seconds: 0\nfree_exhausted_ttl_seconds: 0\n",
         )
     )
     assert s.economy_lambda == 0.0
     assert s.free_tier_sync_ttl_seconds == 0.0
-    assert s.free_exhausted_ttl_seconds == 0.0
     assert s.free_gate.ttl_seconds == 0.0
-    assert s.sticky_ttl_seconds == 0.0
 
 
 def test_missing_numbers_use_defaults(tmp_path: Path):
@@ -89,3 +87,29 @@ def test_non_numeric_number_is_config_error(tmp_path: Path):
 def test_bad_listen_port_is_config_error(tmp_path: Path, listen: str):
     with pytest.raises(ConfigError, match="listen"):
         load_settings(write_config(tmp_path, listen=listen))
+
+
+# --- 8. Unimplemented keys are ignored loudly, not silently ------------------
+
+
+def test_unimplemented_keys_warn_and_are_not_settings(tmp_path: Path, caplog):
+    cfg = write_config(tmp_path, "sticky: true\nsticky_ttl_seconds: 5\naliases:\n  auto: { models: [] }\n")
+    with caplog.at_level("WARNING", logger="qwenr.config"):
+        s = load_settings(cfg)
+    assert "sticky" in caplog.text and "aliases" in caplog.text
+    assert not hasattr(s, "sticky")
+    assert not hasattr(s, "sticky_ttl_seconds")
+
+
+def test_free_exhausted_ttl_lives_on_the_gate_only(tmp_path: Path):
+    s = load_settings(write_config(tmp_path, "free_exhausted_ttl_seconds: 42\n"))
+    assert s.free_gate.ttl_seconds == 42.0
+    assert not hasattr(s, "free_exhausted_ttl_seconds")
+
+
+# --- 13. Request size limit --------------------------------------------------
+
+
+def test_max_request_bytes_default_and_override(tmp_path: Path):
+    assert load_settings(write_config(tmp_path)).max_request_bytes == 8 * 1024 * 1024
+    assert load_settings(write_config(tmp_path, "max_request_bytes: 1024\n")).max_request_bytes == 1024

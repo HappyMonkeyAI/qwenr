@@ -255,3 +255,94 @@ async def test_stream_released_after_normal_completion():
     await response(HTTP_SCOPE, _never_receive, send)
     assert stream.closed
     assert b"data:" in b"".join(m.get("body", b"") for m in sent)
+
+
+# --- 9. Role aliases and skip prefixes come from one place ------------------
+
+
+def test_models_endpoint_uses_shared_role_and_skip_lists():
+    from qwenr.place import ROLE_ALIASES, SKIP_PREFIXES
+
+    affinity = AffinityCatalog(scores={"best": {"auto": 90}, f"{SKIP_PREFIXES[0]}-x": {"auto": 90}})
+    http, _ = upstream()
+    with TestClient(build_app(make_settings(affinity=affinity), client=http)) as client:
+        ids = [m["id"] for m in client.get("/v1/models").json()["data"]]
+    assert ids[: len(ROLE_ALIASES)] == list(ROLE_ALIASES)
+    assert "best" in ids
+    assert not any(i.startswith(SKIP_PREFIXES) for i in ids)
+
+
+# --- 12. Failover rows record which quota marker matched --------------------
+
+
+def test_failover_ledger_row_records_marker():
+    http, _ = upstream(payg_status=429, payg_body=QUOTA_BLOCK)
+    with TestClient(build_app(make_settings(free={"best"}), client=http)) as client:
+        chat(client, "best")
+        rows = client.app.state.ledger.recent(10)
+    failover = next(r for r in rows if r["event"] == "failover")
+    assert failover["marker"] == "free quota"
+
+
+# --- 13. Request size limit --------------------------------------------------
+
+
+def test_oversized_body_rejected_by_content_length():
+    http, calls = upstream()
+    with TestClient(build_app(make_settings(max_request_bytes=200), client=http)) as client:
+        resp = client.post("/v1/chat/completions", json={"model": "auto", "messages": [{"content": "x" * 500}]})
+    assert resp.status_code == 413
+    assert resp.json()["error"]["code"] == "request_too_large"
+    assert calls == []
+
+
+def test_oversized_chunked_body_rejected():
+    http, calls = upstream()
+    body = json.dumps({"model": "auto", "messages": [{"content": "x" * 500}]}).encode()
+
+    def chunks():
+        for i in range(0, len(body), 64):
+            yield body[i : i + 64]
+
+    with TestClient(build_app(make_settings(max_request_bytes=200), client=http)) as client:
+        resp = client.post("/v1/chat/completions", content=chunks(), headers={"content-type": "application/json"})
+    assert resp.status_code == 413
+    assert calls == []
+
+
+def test_body_under_limit_is_served():
+    http, _ = upstream()
+    with TestClient(build_app(make_settings(max_request_bytes=10_000), client=http)) as client:
+        assert chat(client, "auto").status_code == 200
+
+
+# --- 15. Money-path coverage ------------------------------------------------
+
+
+def test_missing_payg_key_never_calls_payg():
+    http, calls = upstream()
+    settings = make_settings(free={"best"}, payg=UpstreamConfig(base_url=PAYG, api_key=None))
+    with TestClient(build_app(settings, client=http)) as client:
+        resp = chat(client, "auto:coord")
+    assert resp.status_code == 200
+    assert resp.headers["x-qwenr-lane"] == "token_plan"
+    assert all(lane == "token_plan" for lane, _ in calls)
+
+
+def test_paid_payg_guard_blocks_non_free_placement_on_payg(monkeypatch):
+    http, calls = upstream()
+    monkeypatch.setattr(app_module, "_upstream_for", lambda s, p: s.payg)  # simulate a routing bug
+    with TestClient(build_app(make_settings(), client=http)) as client:
+        resp = chat(client, "auto")
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "payg_paid_blocked"
+    assert calls == []
+
+
+def test_streaming_free_quota_block_fails_over_to_token_plan():
+    http, calls = upstream(payg_status=429, payg_body=QUOTA_BLOCK)
+    with TestClient(build_app(make_settings(free={"best"}), client=http)) as client:
+        resp = client.post("/v1/chat/completions", json={"model": "auto:coord", "messages": [], "stream": True})
+    assert resp.status_code == 200
+    assert resp.headers["x-qwenr-lane"] == "token_plan"
+    assert calls == [("payg", "best"), ("token_plan", "best")]

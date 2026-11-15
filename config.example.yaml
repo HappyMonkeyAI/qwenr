@@ -38,22 +38,9 @@ token_plan:
   api_key: ${QWEN_TOKEN_PLAN_API_KEY:-}
   prefer_platform_auto: false
 
-sticky: true
-sticky_ttl_seconds: 1800
 economy_lambda: 12.0
+# Reject request bodies larger than this (413).
+max_request_bytes: 8388608
 
 models_path: models.yaml
 discounts_path: discounts.yaml
-
-aliases:
-  auto: { models: [] }
-  auto:coder: { models: [] }
-  auto:ops: { models: [] }
-  auto:research: { models: [] }
-  auto:writer: { models: [] }
-  auto:design: { models: [] }
-  auto:qa: { models: [] }
-  auto:docs: { models: [] }
-  auto:skills: { models: [] }
-  auto:assistant: { models: [] }
-  auto:coord: { models: [] }

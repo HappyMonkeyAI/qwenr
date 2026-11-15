@@ -9,7 +9,24 @@ from datetime import datetime
 from qwenr.affinity import AffinityCatalog
 from qwenr.discounts import DiscountCatalog
 
+# Non-text model families: never routed for chat completions.
 SKIP_PREFIXES = ("qwen-image", "qwen-audio", "wan", "happyhorse")
+# OpenBot role ids (mirrors chimp). /v1/models lists these first.
+ROLE_ALIASES = (
+    "auto",
+    "auto:coder",
+    "auto:ops",
+    "auto:research",
+    "auto:writer",
+    "auto:design",
+    "auto:qa",
+    "auto:docs",
+    "auto:skills",
+    "auto:assistant",
+    "auto:coord",
+)
+# Router names clients may prefix ("qwenr/auto:coder").
+ROUTER_PREFIXES = ("qwenr/", "chimpr/")
 DEFAULT_FREE_AFFINITY_SLACK = 3
 
 
@@ -40,7 +57,6 @@ def place(
     economy_lambda: float = 12.0,
     prefer_platform_auto: bool = False,
     now: datetime | None = None,
-    allowlist: tuple[str, ...] | None = None,
     free_candidates: tuple[str, ...] | None = None,
     free_first: bool = True,
     exclude: frozenset[str] = frozenset(),
@@ -56,7 +72,6 @@ def place(
             affinity=affinity,
             discounts=discounts,
             now=now,
-            allowlist=allowlist,
             free_candidates=free_candidates,
             free_first=free_first,
             exclude=exclude,
@@ -84,7 +99,7 @@ def place(
         if free_pick is not None:
             return free_pick
 
-    ids = allowlist or affinity.model_ids()
+    ids = affinity.model_ids()
     candidates: list[Placement] = []
     for mid in ids:
         if mid in exclude or mid == "auto" or mid.startswith(SKIP_PREFIXES):
@@ -165,13 +180,23 @@ def _best_free(
 
 
 def _normalize_role(requested: str | None) -> str:
+    """Role aliases are case-folded; concrete model ids keep their exact spelling.
+
+    Strips router prefixes ("qwenr/", "chimpr/"). Any other provider prefix is
+    dropped only when what follows is a role alias ("openai/auto:coder"), so
+    vendor-scoped model ids like "moonshotai/Kimi-K3" survive intact.
+    """
     name = (requested or "auto").strip()
-    if "/" in name:
-        name = name.rsplit("/", 1)[-1]
     folded = name.casefold()
-    if folded.startswith("chimpr/") or folded.startswith("qwenr/"):
-        name = name.split("/", 1)[-1]
-    return name.casefold()
+    for prefix in ROUTER_PREFIXES:
+        if folded.startswith(prefix):
+            name = name[len(prefix) :]
+            folded = folded[len(prefix) :]
+            break
+    tail = folded.rsplit("/", 1)[-1]
+    if _is_role_alias(tail):
+        return tail
+    return name
 
 
 def _is_role_alias(name: str) -> bool:
@@ -184,15 +209,15 @@ def _exact_model(
     affinity: AffinityCatalog,
     discounts: DiscountCatalog,
     now: datetime | None,
-    allowlist: tuple[str, ...] | None,
     free_candidates: tuple[str, ...] | None,
     free_first: bool,
     exclude: frozenset[str],
 ) -> Placement:
+    ids = set(affinity.model_ids())
+    free = set(free_candidates or ())
+    model_id = _canonical_id(model_id, ids | free)
     if model_id in exclude:
         raise PlaceError(404, "model_not_found", f"Model {model_id!r} is excluded.")
-    ids = set(allowlist or affinity.model_ids())
-    free = set(free_candidates or ())
     if free_first and model_id in free:
         return Placement(
             model_id=model_id,
@@ -215,3 +240,11 @@ def _exact_model(
             lane="token_plan",
         )
     raise PlaceError(404, "model_not_found", f"Unknown model {model_id!r}.")
+
+
+def _canonical_id(model_id: str, known: set[str]) -> str:
+    """Exact match first, then a unique case-insensitive match; else unchanged."""
+    if model_id in known:
+        return model_id
+    matches = [mid for mid in known if mid.casefold() == model_id.casefold()]
+    return matches[0] if len(matches) == 1 else model_id

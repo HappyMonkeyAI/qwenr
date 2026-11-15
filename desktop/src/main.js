@@ -3,13 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadOperatorView, readRouterApiKey, saveOperatorSettings } from "./config-store.js";
+import { ensureConfig, loadOperatorView, readRouterApiKey, saveOperatorSettings } from "./config-store.js";
+import { guardIpc } from "./ipc-guard.js";
 import { RouterProcess } from "./router-process.js";
+import { probeStatus } from "./status-probe.js";
 
 const desktopDir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(desktopDir, "..", "..");
 const prefsPath = path.join(app.getPath("userData"), "qwenr-tray.json");
-const router = new RouterProcess(root);
+const router = new RouterProcess(root, { logPath: path.join(app.getPath("userData"), "router.log") });
 
 let tray;
 let windowRef;
@@ -53,18 +55,7 @@ function probeHost(settings) {
 async function liveStatus() {
   const settings = loadOperatorView(root);
   const base = `http://${probeHost(settings)}:${settings.listenPort}`;
-  const key = readRouterApiKey(root);
-  const headers = key ? { authorization: `Bearer ${key}` } : {};
-  try {
-    const healthResponse = await fetch(`${base}/health`);
-    const health = await healthResponse.json();
-    const statusResponse = await fetch(`${base}/status`, { headers });
-    if (!statusResponse.ok) return { health, error: `status ${statusResponse.status}` };
-    const status = await statusResponse.json();
-    return { health, status };
-  } catch (error) {
-    return { error: error.message };
-  }
+  return probeStatus({ base, key: readRouterApiKey(root) });
 }
 
 async function snapshot() {
@@ -112,18 +103,18 @@ function rebuildMenu() {
     { label: "Settings", click: showWindow },
     { label: "Start router", click: () => router.start() },
     { label: "Stop router", click: () => router.stop() },
-    { label: "Restart router", click: () => { router.stop(); setTimeout(() => router.start(), 600); } },
+    { label: "Restart router", click: () => router.restart() },
     { type: "separator" },
-    { label: "Quit", click: () => { app.isQuitting = true; router.stop(); app.quit(); } },
+    { label: "Quit", click: async () => { app.isQuitting = true; await router.stop(); app.quit(); } },
   ]);
   tray.setContextMenu(menu);
 }
 
-function trusted(event) {
-  if (!windowRef || event.sender !== windowRef.webContents) throw new Error("untrusted renderer");
-}
+// Every IPC handler only answers the settings window.
+const handle = (channel, fn) => ipcMain.handle(channel, guardIpc(() => windowRef, fn));
 
 app.whenReady().then(async () => {
+  ensureConfig(root);
   const prefs = readPrefs();
   openAtLogin = Boolean(prefs.openAtLogin);
   app.setLoginItemSettings({ openAtLogin });
@@ -136,22 +127,17 @@ app.whenReady().then(async () => {
   showWindow();
 });
 
-ipcMain.handle("qwenr:get-state", () => snapshot());
-ipcMain.handle("qwenr:start", () => router.start());
-ipcMain.handle("qwenr:stop", () => router.stop());
-ipcMain.handle("qwenr:restart", async () => {
-  router.stop();
-  await new Promise((resolve) => setTimeout(resolve, 700));
-  return router.start();
-});
-ipcMain.handle("qwenr:login", (_event, enabled) => {
+handle("qwenr:get-state", () => snapshot());
+handle("qwenr:start", () => router.start());
+handle("qwenr:stop", () => router.stop());
+handle("qwenr:restart", () => router.restart());
+handle("qwenr:login", (_event, enabled) => {
   openAtLogin = Boolean(enabled);
   app.setLoginItemSettings({ openAtLogin });
   writePrefs({ openAtLogin });
   return { openAtLogin };
 });
-ipcMain.handle("qwenr:save", async (event, patch) => {
-  trusted(event);
+handle("qwenr:save", async (_event, patch) => {
   const current = loadOperatorView(root);
   const turningPaidOn = Boolean(patch.paygAllowPaid) && !current.paygAllowPaid;
   if (turningPaidOn) {

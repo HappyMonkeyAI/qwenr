@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -13,6 +14,13 @@ import yaml
 from qwenr.affinity import AffinityCatalog, load_affinity
 from qwenr.discounts import DiscountCatalog, load_discounts
 from qwenr.free import FreeQuotaGate, load_free_models
+
+log = logging.getLogger("qwenr.config")
+
+# Accepted for forward/back compat but not implemented. Warn so nobody
+# believes they are in effect.
+_UNIMPLEMENTED_KEYS = ("sticky", "sticky_ttl_seconds", "aliases")
+DEFAULT_MAX_REQUEST_BYTES = 8 * 1024 * 1024
 
 _ENV = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
@@ -43,10 +51,7 @@ class Settings:
     token_plan_only: bool = False
     # Safety default: never send PAYG once free quota is gone / unknown paid path.
     payg_allow_paid: bool = False
-    sticky: bool = True
-    sticky_ttl_seconds: float = 1800.0
     economy_lambda: float = 12.0
-    free_exhausted_ttl_seconds: float = 3600.0
     free_affinity_slack: int = 3
     ledger_path: Path | None = None
     free_tier_sync: bool = True
@@ -54,6 +59,7 @@ class Settings:
     free_tier_sync_max_age_seconds: float = 900.0
     free_tier_sync_command: str = "qwencloud"
     free_tier_snapshot_path: Path | None = None
+    max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES
     config_path: Path | None = None
 
     # Back-compat alias used by older smoke helpers.
@@ -87,6 +93,9 @@ def load_settings(path: Path) -> Settings:
         raise ConfigError("Config root must be a mapping.")
     data = expand_env(raw)
     assert isinstance(data, dict)
+    ignored = [key for key in _UNIMPLEMENTED_KEYS if key in data]
+    if ignored:
+        log.warning("config keys not implemented, ignored: %s", ", ".join(ignored))
     host, port = _parse_listen(str(data.get("listen") or "127.0.0.1:8788"))
     api_key = _blank(data.get("api_key"))
     if not api_key and not _is_loopback(host):
@@ -119,10 +128,7 @@ def load_settings(path: Path) -> Settings:
         free_first=_bool(data, "free_first", True),
         token_plan_only=_bool(data, "token_plan_only", False),
         payg_allow_paid=_bool(data, "payg_allow_paid", False),
-        sticky=_bool(data, "sticky", True),
-        sticky_ttl_seconds=_float(data, "sticky_ttl_seconds", 1800.0),
         economy_lambda=_float(data, "economy_lambda", 12.0),
-        free_exhausted_ttl_seconds=ttl,
         free_affinity_slack=int(_float(data, "free_affinity_slack", 3)),
         ledger_path=_optional_path(data.get("ledger_path") or "placement.ndjson", root),
         free_tier_sync=_bool(data, "free_tier_sync", True),
@@ -130,6 +136,7 @@ def load_settings(path: Path) -> Settings:
         free_tier_sync_max_age_seconds=max_age,
         free_tier_sync_command=str(data.get("free_tier_sync_command") or "qwencloud").strip() or "qwencloud",
         free_tier_snapshot_path=_optional_path(data.get("free_tier_snapshot_path"), root),
+        max_request_bytes=int(_float(data, "max_request_bytes", DEFAULT_MAX_REQUEST_BYTES)),
         config_path=path,
     )
 
