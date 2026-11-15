@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from types import SimpleNamespace
 from datetime import time as dtime
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from qwenr.config import ConfigError, Settings, UpstreamConfig, load_settings
 from qwenr.discounts import DiscountCatalog
 from qwenr.free import FreeQuotaGate
 from qwenr.free_sync import FreeTierSyncResult
+from qwenr.place import Placement
 
 PAYG = "https://payg.test/v1"
 TOKEN_PLAN = "https://tp.test/v1"
@@ -37,8 +39,14 @@ DISCOUNTS = DiscountCatalog(
 )
 
 
-def make_settings(*, free: set[str] = frozenset(), api_key: str | None = None, **overrides) -> Settings:
-    gate = FreeQuotaGate(eligible=frozenset({"best", "other"}))
+def make_settings(
+    *,
+    free: set[str] = frozenset(),
+    api_key: str | None = None,
+    eligible: set[str] = frozenset({"best", "other"}),
+    **overrides,
+) -> Settings:
+    gate = FreeQuotaGate(eligible=frozenset(eligible))
     gate.apply_sync_blocks({}, allowed=set(free), source="test")
     base = dict(
         listen_host="127.0.0.1",
@@ -176,3 +184,74 @@ def test_failed_sync_runs_off_loop_and_backs_off(monkeypatch):
 
     assert len(seen) == 1, "failed refresh must back off for the TTL, not retry per request"
     assert seen[0] != loop_threads[0], "sync must run in a worker thread, not on the event loop"
+
+
+# --- 6. Retry budget covers every free candidate plus Token Plan -----------
+
+
+def test_many_free_quota_blocks_still_reach_token_plan():
+    free_ids = [f"free{i}" for i in range(6)]
+    affinity = AffinityCatalog(scores={mid: {"auto": 90 - i} for i, mid in enumerate(free_ids)} | {"tp": {"auto": 80}})
+    http, calls = upstream(payg_status=429, payg_body=QUOTA_BLOCK)
+    settings = make_settings(free=set(free_ids), eligible=set(free_ids), affinity=affinity, free_affinity_slack=0)
+    with TestClient(build_app(settings, client=http)) as client:
+        resp = chat(client, "auto")
+    assert resp.status_code == 200
+    assert resp.headers["x-qwenr-lane"] == "token_plan"
+    assert [lane for lane, _ in calls] == ["payg"] * 6 + ["token_plan"]
+
+
+# --- 7. Streaming upstream is always released -------------------------------
+
+
+class TrackingStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def __aiter__(self):
+        yield b"data: {}\n\n"
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+async def _streaming_response(stream: TrackingStream):
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, stream=stream, headers={"content-type": "text/event-stream"})
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(client=httpx.AsyncClient(transport=transport))))
+    placement = Placement(model_id="best", requested="auto", reason="fit", affinity=95, cost_weight=1.0, score=1.0)
+    upstream_cfg = UpstreamConfig(base_url=TOKEN_PLAN, api_key="sk-sp-test")
+    return await app_module._dispatch(request, upstream_cfg, {"model": "best", "stream": True}, placement)
+
+
+HTTP_SCOPE = {"type": "http", "asgi": {"spec_version": "2.4"}, "method": "POST", "path": "/", "headers": []}
+
+
+async def _never_receive():
+    raise AssertionError("receive should not be needed")
+
+
+async def test_stream_released_when_client_disconnects_before_body():
+    stream = TrackingStream()
+    response = await _streaming_response(stream)
+
+    async def send(message):
+        raise OSError("client went away")  # disconnect on http.response.start
+
+    with pytest.raises(Exception):
+        await response(HTTP_SCOPE, _never_receive, send)
+    assert stream.closed, "upstream stream must be closed even if the body was never iterated"
+
+
+async def test_stream_released_after_normal_completion():
+    stream = TrackingStream()
+    response = await _streaming_response(stream)
+    sent: list[dict] = []
+
+    async def send(message):
+        sent.append(message)
+
+    await response(HTTP_SCOPE, _never_receive, send)
+    assert stream.closed
+    assert b"data:" in b"".join(m.get("body", b"") for m in sent)

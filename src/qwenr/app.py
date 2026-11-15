@@ -139,7 +139,11 @@ async def chat(request: Request) -> Response:
     attempt = 0
 
     await _maybe_refresh_free_tier(request.app)
-    for attempt in range(4):
+    # Each free model may fail over once; then one Token Plan attempt (+1 spare).
+    # A fixed budget let a burst of free quota blocks return an error before
+    # Token Plan was ever tried.
+    max_attempts = len(_free_candidates(settings)) + 2
+    for attempt in range(max_attempts):
         free_candidates = tuple(m for m in _free_candidates(settings) if m not in free_exclude)
         try:
             placement = place(
@@ -358,9 +362,11 @@ async def _dispatch(
     }
     stream = payload.get("stream") is True
     if stream:
-        stream_cm = client.stream("POST", url, headers=headers, json=payload)
         try:
-            response = await stream_cm.__aenter__()
+            response = await client.send(
+                client.build_request("POST", url, headers=headers, json=payload),
+                stream=True,
+            )
         except httpx.TransportError as exc:
             log.warning("upstream transport error: %s", exc)
             return _error(
@@ -372,26 +378,21 @@ async def _dispatch(
 
         # Peek status before streaming body to client when free lane may need failover.
         if response.status_code >= 400:
-            body = await response.aread()
-            await stream_cm.__aexit__(None, None, None)
+            try:
+                body = await response.aread()
+            finally:
+                await response.aclose()
             out = _placement_headers(placement)
             ctype = response.headers.get("content-type")
             if ctype:
                 out["content-type"] = ctype
             return Response(body, status_code=response.status_code, headers=out, media_type=ctype)
 
-        async def chunks():
-            try:
-                async for chunk in response.aiter_bytes():
-                    yield chunk
-            finally:
-                await stream_cm.__aexit__(None, None, None)
-
         out_headers = _placement_headers(placement)
         ctype = response.headers.get("content-type")
         if ctype:
             out_headers["content-type"] = ctype
-        return StreamingResponse(chunks(), status_code=response.status_code, headers=out_headers)
+        return _UpstreamStreamingResponse(response, status_code=response.status_code, headers=out_headers)
 
     try:
         upstream_resp = await client.post(url, headers=headers, json=payload)
@@ -413,6 +414,25 @@ async def _dispatch(
         headers=out_headers,
         media_type=ctype,
     )
+
+
+class _UpstreamStreamingResponse(StreamingResponse):
+    """Relay an upstream stream and always release its connection.
+
+    Closing inside the body generator is not enough: if the client disconnects
+    before the first chunk, the generator never starts (so its `finally` never
+    runs) and Starlette skips `background` on ClientDisconnect.
+    """
+
+    def __init__(self, upstream: httpx.Response, **kwargs: Any) -> None:
+        self._upstream = upstream
+        super().__init__(upstream.aiter_bytes(), **kwargs)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self._upstream.aclose()  # idempotent
 
 
 def _alias_ids() -> list[str]:

@@ -100,8 +100,8 @@ def load_settings(path: Path) -> Settings:
     models_path = _optional_path(data.get("models_path"), root) or (root / "models.yaml")
     discounts_path = _optional_path(data.get("discounts_path"), root) or (root / "discounts.yaml")
     free_path = _optional_path(data.get("free_models_path"), root) or (root / "free_models.yaml")
-    ttl = float(data.get("free_exhausted_ttl_seconds") or 3600)
-    max_age = float(data.get("free_tier_sync_max_age_seconds") or 900)
+    ttl = _float(data, "free_exhausted_ttl_seconds", 3600.0)
+    max_age = _float(data, "free_tier_sync_max_age_seconds", 900.0)
     free_gate = FreeQuotaGate(
         eligible=load_free_models(free_path),
         ttl_seconds=ttl,
@@ -116,17 +116,17 @@ def load_settings(path: Path) -> Settings:
         affinity=load_affinity(models_path),
         discounts=load_discounts(discounts_path),
         free_gate=free_gate,
-        free_first=True if data.get("free_first") is None else bool(data.get("free_first")),
-        token_plan_only=bool(data.get("token_plan_only") or False),
-        payg_allow_paid=bool(data.get("payg_allow_paid") or False),
-        sticky=True if data.get("sticky") is None else bool(data.get("sticky")),
-        sticky_ttl_seconds=float(data.get("sticky_ttl_seconds") or 1800),
-        economy_lambda=float(data.get("economy_lambda") or 12.0),
+        free_first=_bool(data, "free_first", True),
+        token_plan_only=_bool(data, "token_plan_only", False),
+        payg_allow_paid=_bool(data, "payg_allow_paid", False),
+        sticky=_bool(data, "sticky", True),
+        sticky_ttl_seconds=_float(data, "sticky_ttl_seconds", 1800.0),
+        economy_lambda=_float(data, "economy_lambda", 12.0),
         free_exhausted_ttl_seconds=ttl,
-        free_affinity_slack=int(data.get("free_affinity_slack") if data.get("free_affinity_slack") is not None else 3),
+        free_affinity_slack=int(_float(data, "free_affinity_slack", 3)),
         ledger_path=_optional_path(data.get("ledger_path") or "placement.ndjson", root),
-        free_tier_sync=True if data.get("free_tier_sync") is None else bool(data.get("free_tier_sync")),
-        free_tier_sync_ttl_seconds=float(data.get("free_tier_sync_ttl_seconds") or 300),
+        free_tier_sync=_bool(data, "free_tier_sync", True),
+        free_tier_sync_ttl_seconds=_float(data, "free_tier_sync_ttl_seconds", 300.0),
         free_tier_sync_max_age_seconds=max_age,
         free_tier_sync_command=str(data.get("free_tier_sync_command") or "qwencloud").strip() or "qwencloud",
         free_tier_snapshot_path=_optional_path(data.get("free_tier_snapshot_path"), root),
@@ -145,7 +145,7 @@ def _parse_token_plan(data: dict) -> UpstreamConfig:
     return UpstreamConfig(
         base_url=base_url,
         api_key=_blank(raw.get("api_key")),
-        prefer_platform_auto=bool(raw.get("prefer_platform_auto") or False),
+        prefer_platform_auto=_bool(raw, "prefer_platform_auto", False, prefix="token_plan."),
     )
 
 
@@ -167,9 +167,42 @@ def _parse_payg(data: dict) -> UpstreamConfig | None:
 
 def _parse_listen(value: str) -> tuple[str, int]:
     host, sep, port = value.rpartition(":")
-    if not sep:
-        raise ConfigError(f"listen must look like 127.0.0.1:8788, got {value!r}.")
+    if not sep or not port.strip().isdigit() or not 1 <= int(port) <= 65535:
+        raise ConfigError(f"listen must look like 127.0.0.1:8788 (port 1-65535), got {value!r}.")
     return host or "127.0.0.1", int(port)
+
+
+_TRUE = frozenset({"true", "1", "yes", "on"})
+_FALSE = frozenset({"false", "0", "no", "off"})
+
+
+def _bool(data: dict, key: str, default: bool, *, prefix: str = "") -> bool:
+    # Env expansion turns YAML booleans into strings ("${X:-false}" -> "false"),
+    # and bool("false") is True. Parse explicitly; blank means default.
+    value = data.get(key)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().casefold()
+    if text in _TRUE:
+        return True
+    if text in _FALSE:
+        return False
+    raise ConfigError(f"{prefix}{key} must be true or false, got {value!r}.")
+
+
+def _float(data: dict, key: str, default: float) -> float:
+    # Explicit None/blank check so 0 is a real value, not "use the default".
+    value = data.get(key)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return default
+    if isinstance(value, bool):
+        raise ConfigError(f"{key} must be a number, got {value!r}.")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{key} must be a number, got {value!r}.") from None
 
 
 def _is_loopback(host: str) -> bool:
