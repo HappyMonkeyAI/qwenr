@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ensureConfig, loadOperatorView, readRouterApiKey, saveOperatorSettings } from "./config-store.js";
+import { applySavedSettings, routingMismatch } from "./apply-settings.js";
 import { guardIpc } from "./ipc-guard.js";
 import { RouterProcess } from "./router-process.js";
 import { probeStatus } from "./status-probe.js";
@@ -61,11 +62,16 @@ async function liveStatus() {
 async function snapshot() {
   const settings = loadOperatorView(root);
   const live = await liveStatus();
+  const warnings = [
+    ...settings.duplicateKeys.map((key) => `config.yaml sets ${key} more than once; the router uses the last line.`),
+    ...routingMismatch(settings, live.status),
+  ];
   return {
     settings,
     openAtLogin,
     router: router.owned ? "owned" : live.health ? "external" : "stopped",
     live,
+    warnings,
     lastError: router.lastError,
   };
 }
@@ -165,10 +171,14 @@ handle("qwenr:save", async (_event, patch) => {
     if (answer.response !== 1) return { error: "Kept listen on localhost." };
     patch = { ...patch, allowLan: true };
   }
+  let saved;
   try {
-    saveOperatorSettings(root, patch);
-    return { ok: true };
+    saved = saveOperatorSettings(root, patch);
   } catch (error) {
     return { error: error.message };
   }
+  // The router only reads config at startup: apply the change now, or say why not.
+  const externalLive = !router.owned && Boolean((await liveStatus()).health);
+  const applied = await applySavedSettings({ before: current, after: saved, router, externalLive });
+  return { ok: true, ...applied };
 });

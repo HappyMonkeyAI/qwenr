@@ -24,6 +24,7 @@
     button.warn { background: #8a3d2f; }
     #status { white-space: pre-wrap; background: #0e1215; border-radius: 8px; padding: 10px; min-height: 92px; font-size: 12px; }
     .danger { color: #f0b4a8; }
+    .banner { background: #5a1f17; color: #ffe1da; border: 1px solid #a5432f; border-radius: 8px; padding: 10px; font-size: 12px; white-space: pre-wrap; }
   </style>
 </head>
 <body>
@@ -42,7 +43,7 @@
     </div>
     <div class="checks">
       <label><input id="tokenPlanOnly" type="checkbox" /> Token Plan only</label>
-      <p>Never call the PAYG key. Restart the router after saving.</p>
+      <p>Never call the PAYG key. Saving restarts a router the tray started.</p>
       <label><input id="freeFirst" type="checkbox" /> Free quota before Token Plan</label>
       <label><input id="freeSync" type="checkbox" /> Sync free tier with qwencloud</label>
       <label class="danger"><input id="paid" type="checkbox" /> Allow paid PAYG after free is gone</label>
@@ -60,6 +61,7 @@
       <button id="stop" class="ghost" type="button">Stop</button>
       <button id="restart" class="warn" type="button">Restart</button>
     </div>
+    <div id="banner" class="banner" hidden></div>
     <div id="status">Loading…</div>
   </main>
   <script src="settings.js"></script>

@@ -39,10 +39,29 @@ export function assertListenAllowed(host, port, { allowLan = false } = {}) {
   return { host: parsedHost === "localhost" ? "127.0.0.1" : parsedHost, port: parsedPort };
 }
 
+// Top-level keys the tray writes. Each must appear at most once.
+export const MANAGED_KEYS = ["listen", "token_plan_only", "free_first", "payg_allow_paid", "free_tier_sync"];
+
+// Last occurrence wins, matching the router's YAML parser.
 export function readScalar(text, key) {
-  const match = new RegExp(`^${escapeRegExp(key)}:\\s*(.*)$`, "m").exec(text);
-  if (!match) return "";
-  return match[1].trim().replace(/^["']|["']$/g, "");
+  const matches = [...String(text).matchAll(new RegExp(`^${escapeRegExp(key)}:[ \\t]*(.*)$`, "gm"))];
+  if (matches.length === 0) return "";
+  return matches[matches.length - 1][1].trim().replace(/^["']|["']$/g, "");
+}
+
+// Managed keys appearing more than once at top level (column 0), as [key, count].
+export function duplicateKeyCounts(text) {
+  return MANAGED_KEYS.map((key) => [key, String(text).match(new RegExp(`^${escapeRegExp(key)}:`, "gm"))?.length ?? 0]).filter(
+    ([, count]) => count > 1,
+  );
+}
+
+// Same words the router accepts (config._bool). Blank or unknown -> default.
+export function parseFlag(value, fallback) {
+  const text = String(value || "").trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(text)) return true;
+  if (["false", "0", "no", "off"].includes(text)) return false;
+  return fallback;
 }
 
 export function setScalar(text, key, value) {
@@ -113,12 +132,13 @@ export function loadOperatorView(root) {
   return {
     listenHost: listen.host,
     listenPort: listen.port,
-    tokenPlanOnly: readScalar(configText, "token_plan_only") === "true",
-    freeFirst: readScalar(configText, "free_first") !== "false",
-    paygAllowPaid: readScalar(configText, "payg_allow_paid") === "true",
-    freeTierSync: readScalar(configText, "free_tier_sync") !== "false",
+    tokenPlanOnly: parseFlag(readScalar(configText, "token_plan_only"), false),
+    freeFirst: parseFlag(readScalar(configText, "free_first"), true),
+    paygAllowPaid: parseFlag(readScalar(configText, "payg_allow_paid"), false),
+    freeTierSync: parseFlag(readScalar(configText, "free_tier_sync"), true),
     tokenPlanPrefix: keyPrefix(env.QWEN_TOKEN_PLAN_API_KEY),
     paygPrefix: keyPrefix(env.QWEN_PAYG_API_KEY),
+    duplicateKeys: duplicateKeyCounts(configText).map(([key]) => key),
     configPath,
     envPath,
   };
@@ -129,6 +149,14 @@ export function saveOperatorSettings(root, patch) {
   // inject extra lines into .env.
   for (const field of ["tokenPlanKey", "paygKey"]) {
     if (/[\r\n]/.test(String(patch[field] || ""))) throw new Error("API keys must be a single line");
+  }
+  // With a duplicated key the router uses the last line; rewriting only one of
+  // them could show "Token Plan only: on" while PAYG stays active. Refuse.
+  const existing = fs.existsSync(path.join(root, "config.yaml")) ? fs.readFileSync(path.join(root, "config.yaml"), "utf8") : "";
+  const duplicates = duplicateKeyCounts(existing);
+  if (duplicates.length > 0) {
+    const detail = duplicates.map(([key, count]) => `${key} appears ${count} times`).join(", ");
+    throw new Error(`config.yaml is ambiguous (${detail}). Remove the extra lines, then save again.`);
   }
   const view = loadOperatorView(root);
   const listen = assertListenAllowed(patch.listenHost ?? view.listenHost, patch.listenPort ?? view.listenPort, {

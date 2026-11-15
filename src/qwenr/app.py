@@ -23,7 +23,7 @@ from qwenr.config import Settings, UpstreamConfig
 from qwenr.free import matched_quota_marker
 from qwenr.free_sync import sync_free_tier
 from qwenr.ledger import PlacementLedger
-from qwenr.place import ROLE_ALIASES, SKIP_PREFIXES, PlaceError, Placement, place
+from qwenr.place import ROLE_ALIASES, SKIP_PREFIXES, PlaceError, Placement, place, resolve_model_id
 
 log = logging.getLogger("qwenr")
 
@@ -37,7 +37,10 @@ def build_app(settings: Settings, client: httpx.AsyncClient | None = None) -> St
         app.state.client = http
         app.state.ledger = PlacementLedger(path=settings.ledger_path)
         app.state.sync_lock = asyncio.Lock()
-        if settings.free_tier_sync:
+        disabled = _free_lane_disabled_reason(settings)
+        if disabled is not None:
+            log.info("free lane disabled (%s); skipping free-tier sync", disabled)
+        elif settings.free_tier_sync:
             result = await asyncio.to_thread(_run_free_tier_sync, settings)
             if result.ok:
                 log.info("free-tier sync startup: allowed=%s blocked=%s", result.valid, sorted(result.blocked))
@@ -99,6 +102,8 @@ async def status(request: Request) -> JSONResponse:
             "free_affinity_slack": settings.free_affinity_slack,
             # Only models the free lane can actually attempt (needs PAYG key).
             "free_available": list(_free_candidates(settings)),
+            # Why free_available is empty (None when the free lane is open).
+            "free_lane_closed": _free_lane_closed_reason(settings),
             "free_tier_sync": settings.free_gate.sync_status(),
             "economy_lambda": settings.economy_lambda,
             "night": settings.discounts.is_night(),
@@ -112,7 +117,7 @@ async def status(request: Request) -> JSONResponse:
 async def models(request: Request) -> JSONResponse:
     settings: Settings = request.app.state.settings
     data = [{"id": mid, "object": "model", "owned_by": "qwenr"} for mid in ROLE_ALIASES]
-    free = set(settings.free_gate.available())
+    free = set(_free_candidates(settings))
     for mid in settings.affinity.model_ids():
         if mid == "auto" or mid.startswith(SKIP_PREFIXES):
             continue
@@ -168,6 +173,14 @@ async def chat(request: Request) -> Response:
         except PlaceError as exc:
             if last_error is not None:
                 return last_error
+            free_only = _free_only_model(settings, requested) if exc.code == "model_not_found" else None
+            if free_only is not None:
+                return _error(
+                    503,
+                    "free_lane_unavailable",
+                    f"Model {free_only!r} is only served on the free PAYG lane (not on Token Plan), "
+                    f"which is unavailable: {_free_lane_closed_reason(settings, free_only)}.",
+                )
             return _error(exc.status, exc.code, exc.message)
 
         log.info(
@@ -308,10 +321,44 @@ async def _read_body_limited(request: Request, limit: int) -> bytes | None:
     return b"".join(chunks)
 
 
-def _free_candidates(settings: Settings) -> tuple[str, ...]:
-    if settings.token_plan_only or not settings.free_first:
-        return ()
+def _free_lane_disabled_reason(settings: Settings) -> str | None:
+    """Config-level reasons the free lane can never be used (no sync needed to know)."""
+    if settings.token_plan_only:
+        return "token_plan_only is set"
+    if not settings.free_first:
+        return "free_first is off"
     if settings.payg is None or not settings.payg.api_key:
+        return "no PAYG key (QWEN_PAYG_API_KEY)"
+    return None
+
+
+def _free_lane_closed_reason(settings: Settings, model_id: str | None = None) -> str | None:
+    """Why the free lane can't serve right now (or can't serve `model_id`); None if it can."""
+    disabled = _free_lane_disabled_reason(settings)
+    if disabled is not None:
+        return disabled
+    closed = settings.free_gate.closed_reason()
+    if closed is not None:
+        return f"free-tier sync is {closed.replace('_', ' ')}"
+    available = settings.free_gate.available()
+    if model_id is not None and model_id not in available:
+        return "no remaining free quota for this model per the last sync"
+    if not available:
+        return "no remaining free quota per the last sync"
+    return None
+
+
+def _free_only_model(settings: Settings, requested: object) -> str | None:
+    """The canonical id if `requested` is a free-catalog model with no Token Plan entry."""
+    eligible = settings.free_gate.eligible
+    model_id = resolve_model_id(str(requested) if requested is not None else None, eligible)
+    if model_id in eligible and model_id not in settings.affinity.scores:
+        return model_id
+    return None
+
+
+def _free_candidates(settings: Settings) -> tuple[str, ...]:
+    if _free_lane_disabled_reason(settings) is not None:
         return ()
     # Allow-list only. A missing or stale sync leaves this empty so PAYG is not called.
     return settings.free_gate.available()
@@ -329,9 +376,7 @@ async def _maybe_refresh_free_tier(app: Starlette) -> None:
     """Refresh at most once per TTL (success or failure), off the event loop, one at a time."""
     settings: Settings = app.state.settings
     gate = settings.free_gate
-    if not settings.free_tier_sync or settings.token_plan_only or not settings.free_first:
-        return
-    if settings.payg is None or not settings.payg.api_key:
+    if not settings.free_tier_sync or _free_lane_disabled_reason(settings) is not None:
         return
     if not gate.refresh_due(settings.free_tier_sync_ttl_seconds):
         return
