@@ -10,6 +10,15 @@ const paygKey = document.querySelector("#paygKey");
 const tokenPrefix = document.querySelector("#tokenPrefix");
 const paygPrefix = document.querySelector("#paygPrefix");
 const status = document.querySelector("#status");
+const banner = document.querySelector("#banner");
+// Warning from the last save (e.g. external router kept old settings); kept until the next save.
+let saveWarning = "";
+
+function showWarnings(warnings) {
+  const all = [saveWarning, ...(warnings || [])].filter(Boolean);
+  banner.textContent = all.join("\n");
+  banner.hidden = all.length === 0;
+}
 
 function fill(state) {
   const settings = state.settings;
@@ -41,6 +50,7 @@ function fill(state) {
   }
   if (state.lastError) lines.push(state.lastError);
   status.textContent = lines.join("\n");
+  showWarnings(state.warnings);
 }
 
 async function refresh() {
@@ -68,8 +78,14 @@ document.querySelector("#save").addEventListener("click", async () => {
   });
   tokenKey.value = "";
   paygKey.value = "";
-  if (result?.error) status.textContent = result.error;
-  else await refresh();
+  saveWarning = result?.warning || "";
+  if (result?.error) {
+    status.textContent = result.error;
+    showWarnings([result.error]);
+  } else {
+    if (result?.restarted) status.textContent = "Saved. Restarting router…";
+    await refresh();
+  }
 });
 
 document.querySelector("#start").addEventListener("click", async () => { await window.qwenrTray.start(); await refresh(); });

@@ -116,7 +116,9 @@ Before putting OpenBot on qwenr:
 
 ## Tray
 
-A Windows tray shell lives in `desktop/`. It starts `python -m qwenr.server`, edits listen / Token Plan only / free-first / free-tier sync, and shows `/status`. API keys are written to `.env` only when you paste a new value; the window shows prefixes. Paid PAYG and a non-localhost bind each ask before they are saved. Restart the router after changing Token Plan only.
+A Windows tray shell lives in `desktop/`. It starts `python -m qwenr.server`, edits listen / Token Plan only / free-first / free-tier sync, and shows `/status`. API keys are written to `.env` only when you paste a new value; the window shows prefixes. Paid PAYG and a non-localhost bind each ask before they are saved.
+
+The router reads its config only at startup, so saving a routing setting (listen, Token Plan only, free-first, free-tier sync, paid PAYG, keys) restarts a router the tray started. A router started outside the tray is left running, and the save warns that it still uses the old settings. A red banner appears whenever the saved settings disagree with what the running router reports, e.g. "PAYG still active". If `config.yaml` sets a managed key more than once, the tray refuses to save until the extra lines are removed. The router uses the last line, so editing just one could show "Token Plan only: on" while PAYG stays active.
 
 ```powershell
 cd desktop
