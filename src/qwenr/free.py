@@ -39,6 +39,13 @@ class FreeQuotaGate:
     _sync_at: float | None = None
     _sync_source: str | None = None
     _sync_error: str | None = None
+    # Last sync attempt, success or failure. Failed refreshes back off on this.
+    _sync_attempt_at: float | None = None
+
+    def refresh_due(self, ttl_seconds: float, now: float | None = None) -> bool:
+        if self._sync_attempt_at is None:
+            return True
+        return ((now or time.time()) - self._sync_attempt_at) >= ttl_seconds
 
     def available(self) -> tuple[str, ...]:
         if self.closed_reason() is not None or self._sync_allowed is None:
@@ -60,11 +67,6 @@ class FreeQuotaGate:
     def mark_exhausted(self, model_id: str) -> None:
         self._exhausted_until[model_id] = time.time() + self.ttl_seconds
 
-    def is_exhausted(self, model_id: str) -> bool:
-        if model_id in self._sync_blocked:
-            return True
-        return self._exhausted_until.get(model_id, 0) > time.time()
-
     def apply_sync_blocks(
         self,
         blocked: dict[str, str],
@@ -80,12 +82,14 @@ class FreeQuotaGate:
             mid for mid in permitted if mid in self.eligible and mid not in blocked_ids
         )
         self._sync_at = time.time()
+        self._sync_attempt_at = self._sync_at
         self._sync_source = source
         self._sync_error = None
 
     def note_sync_error(self, error: str, *, source: str | None = None) -> None:
         self._sync_error = error
         self._sync_source = source
+        self._sync_attempt_at = time.time()
         # Keep the previous allow-list. A failed refresh must not reopen the catalog.
 
     def sync_status(self) -> dict[str, object]:
@@ -109,8 +113,17 @@ def load_free_models(path: Path | None = None) -> frozenset[str]:
     return frozenset(str(item).strip() for item in models if str(item).strip())
 
 
-def looks_like_quota_or_billing_block(status_code: int, body: bytes) -> bool:
+def matched_quota_marker(status_code: int, body: bytes) -> str | None:
+    """Which marker made this a quota/billing block (None if it isn't one).
+
+    Logged on failover so a revoked key ("access denied") can be told apart
+    from a genuinely spent free quota.
+    """
     if status_code not in {400, 401, 402, 403, 429, 503}:
-        return False
+        return None
     text = body.decode("utf-8", errors="ignore").casefold()
-    return any(marker in text for marker in QUOTA_EXHAUSTED_MARKERS)
+    return next((marker for marker in QUOTA_EXHAUSTED_MARKERS if marker in text), None)
+
+
+def looks_like_quota_or_billing_block(status_code: int, body: bytes) -> bool:
+    return matched_quota_marker(status_code, body) is not None

@@ -126,3 +126,64 @@ def test_exact_model_id_not_remapped_by_free_spread():
     assert chosen.model_id == "qwen3.8-max"
     assert chosen.lane == "free"
     assert chosen.reason == "exact_free"
+
+
+# --- 10. Role/model normalization --------------------------------------------
+
+from qwenr.affinity import AffinityCatalog  # noqa: E402
+from qwenr.free import matched_quota_marker  # noqa: E402
+
+
+def test_router_prefix_and_alias_case_fold():
+    aff, disc = load_affinity(), load_discounts()
+    assert place("qwenr/AUTO:Coder", aff, disc, free_first=False).requested == "auto:coder"
+    assert place("openai/auto:coord", aff, disc, free_first=False).requested == "auto:coord"
+
+
+def test_concrete_id_resolves_case_insensitively_to_catalog_id():
+    aff, disc = load_affinity(), load_discounts()
+    chosen = place("qwenr/Qwen3.8-Max", aff, disc, free_first=False)
+    assert chosen.model_id == "qwen3.8-max"
+
+
+def test_vendor_prefixed_concrete_id_is_preserved():
+    aff = AffinityCatalog(scores={"moonshotai/Kimi-K3": {"auto": 80}})
+    chosen = place("moonshotai/Kimi-K3", aff, load_discounts(), free_first=False)
+    assert chosen.model_id == "moonshotai/Kimi-K3"
+
+
+# --- 12. Quota marker attribution --------------------------------------------
+
+
+def test_matched_quota_marker_names_the_marker():
+    assert matched_quota_marker(429, b'{"error":"Free quota exhausted"}') == "free quota"
+    assert matched_quota_marker(401, b"Access denied: invalid key") == "access denied"
+    assert matched_quota_marker(500, b"free quota") is None
+    assert matched_quota_marker(429, b"slow down") is None
+
+
+def test_provider_prefixed_id_falls_back_to_last_segment():
+    aff, disc = load_affinity(), load_discounts()
+    chosen = place("openai/Qwen3.8-Max", aff, disc, free_first=False)
+    assert chosen.model_id == "qwen3.8-max"
+    assert chosen.requested == "qwen3.8-max"
+
+
+def test_full_vendor_id_wins_over_last_segment():
+    aff = AffinityCatalog(scores={"moonshotai/kimi-k3": {"auto": 80}, "kimi-k3": {"auto": 70}})
+    assert place("moonshotai/kimi-k3", aff, load_discounts(), free_first=False).model_id == "moonshotai/kimi-k3"
+
+
+def test_provider_prefixed_free_id_still_uses_free_lane():
+    aff, disc = load_affinity(), load_discounts()
+    chosen = place("openai/qwen3.8-flash", aff, disc, free_candidates=("qwen3.8-flash",))
+    assert (chosen.model_id, chosen.lane) == ("qwen3.8-flash", "free")
+
+
+def test_unknown_prefixed_id_is_still_404():
+    import pytest
+    from qwenr.place import PlaceError
+
+    with pytest.raises(PlaceError) as exc:
+        place("openai/gpt-9", load_affinity(), load_discounts(), free_first=False)
+    assert exc.value.status == 404 and "openai/gpt-9" in exc.value.message
