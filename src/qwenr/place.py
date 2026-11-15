@@ -48,6 +48,19 @@ def place(
     free_usage: Mapping[str, int] | None = None,
 ) -> Placement:
     role = _normalize_role(requested)
+    # Concrete model ids must pass through. Treating "qwen3.8-max" as a role
+    # made free_quota_spread remap it to kimi (and break vibes temperature=0.9).
+    if role and not _is_role_alias(role):
+        return _exact_model(
+            role,
+            affinity=affinity,
+            discounts=discounts,
+            now=now,
+            allowlist=allowlist,
+            free_candidates=free_candidates,
+            free_first=free_first,
+            exclude=exclude,
+        )
     if prefer_platform_auto and role in {"auto", ""}:
         return Placement(
             model_id=affinity.passthrough_auto or "auto",
@@ -159,3 +172,46 @@ def _normalize_role(requested: str | None) -> str:
     if folded.startswith("chimpr/") or folded.startswith("qwenr/"):
         name = name.split("/", 1)[-1]
     return name.casefold()
+
+
+def _is_role_alias(name: str) -> bool:
+    return name == "auto" or name.startswith("auto:")
+
+
+def _exact_model(
+    model_id: str,
+    *,
+    affinity: AffinityCatalog,
+    discounts: DiscountCatalog,
+    now: datetime | None,
+    allowlist: tuple[str, ...] | None,
+    free_candidates: tuple[str, ...] | None,
+    free_first: bool,
+    exclude: frozenset[str],
+) -> Placement:
+    if model_id in exclude:
+        raise PlaceError(404, "model_not_found", f"Model {model_id!r} is excluded.")
+    ids = set(allowlist or affinity.model_ids())
+    free = set(free_candidates or ())
+    if free_first and model_id in free:
+        return Placement(
+            model_id=model_id,
+            requested=model_id,
+            reason="exact_free",
+            affinity=affinity.score(model_id, "auto"),
+            cost_weight=0.0,
+            score=float(affinity.score(model_id, "auto")),
+            lane="free",
+        )
+    if model_id in ids or model_id in free:
+        cost = discounts.effective_weight(model_id, now=now)
+        return Placement(
+            model_id=model_id,
+            requested=model_id,
+            reason="exact",
+            affinity=affinity.score(model_id, "auto"),
+            cost_weight=cost,
+            score=float(affinity.score(model_id, "auto")),
+            lane="token_plan",
+        )
+    raise PlaceError(404, "model_not_found", f"Unknown model {model_id!r}.")

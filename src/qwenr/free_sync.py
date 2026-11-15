@@ -98,7 +98,7 @@ def apply_free_tier_rows(
             blocked[row.model_id] = reason
         else:
             valid.append(row.model_id)
-    gate.apply_sync_blocks(blocked, source=source)
+    gate.apply_sync_blocks(blocked, allowed=set(valid), source=source)
     return FreeTierSyncResult(
         ok=True,
         source=source,

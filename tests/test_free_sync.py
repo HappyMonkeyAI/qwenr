@@ -38,8 +38,32 @@ def test_sync_from_fixture_blocks_exhausted():
     assert "kimi-k3.1-pro" not in available
     assert "qwen3.8-max" not in available
     assert "qwen3.8-flash" in available
-    # Not in snapshot → still available (no false block).
-    assert "deepseek-v4.1-flash" in available
+    assert "glm-5.3" in available
+    # Not in the snapshot → not allowed. Unknown quota must not hit PAYG.
+    assert "deepseek-v4.1-flash" not in available
+
+
+def test_unsynced_catalog_is_closed():
+    gate = FreeQuotaGate(eligible=frozenset({"qwen3.8-flash", "kimi-k3"}))
+    assert gate.available() == ()
+    assert gate.sync_status()["closed"] == "no_sync"
+
+
+def test_stale_sync_closes_free_lane():
+    gate = FreeQuotaGate(eligible=frozenset({"qwen3.8-flash"}), max_age_seconds=10)
+    gate.apply_sync_blocks({}, allowed={"qwen3.8-flash"}, source="test")
+    assert gate.available() == ("qwen3.8-flash",)
+    gate._sync_at = 0
+    assert gate.available() == ()
+    assert gate.sync_status()["closed"] == "stale"
+
+
+def test_failed_refresh_keeps_fresh_allow_list():
+    gate = FreeQuotaGate(eligible=frozenset({"qwen3.8-flash", "kimi-k3.1-pro", "qwen3.8-max", "glm-5.3"}))
+    sync_free_tier(gate, snapshot_path=FIXTURE)
+    gate.note_sync_error("TOKEN_EXPIRED", source="cli")
+    assert "qwen3.8-flash" in gate.available()
+    assert "kimi-k3.1-pro" not in gate.available()
 
 
 def test_place_skips_sync_blocked_free_models():

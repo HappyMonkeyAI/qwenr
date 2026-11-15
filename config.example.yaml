@@ -5,7 +5,9 @@ listen: 127.0.0.1:8788
 api_key: ${QWENR_API_KEY:-}
 
 # Safety: free Singapore PAYG quota first; never silent PAYG paid overrun.
+# token_plan_only skips the PAYG key entirely (Token Plan Credits only).
 free_first: true
+token_plan_only: false
 payg_allow_paid: false
 free_exhausted_ttl_seconds: 3600
 # Within this affinity gap, prefer underused free models (spread quota).
@@ -15,10 +17,12 @@ free_models_path: free_models.yaml
 ledger_path: placement.ndjson
 
 # Live free-tier sync via QwenCloud CLI (`qwencloud auth login` once).
-# Blocks exhaust/expire/remaining=0 before free-lane calls. Fails open on CLI errors
-# (keeps last successful blocks). Optional snapshot for airgap/tests.
+# The free lane is an allow-list: only models a fresh sync still shows with quota.
+# No sync, a failed startup sync, or a sync older than max_age closes the lane
+# (Token Plan instead). A failed refresh keeps the last fresh allow-list.
 free_tier_sync: true
 free_tier_sync_ttl_seconds: 300
+free_tier_sync_max_age_seconds: 900
 free_tier_sync_command: qwencloud
 # free_tier_snapshot_path: tests/fixtures/free_tier.json
 

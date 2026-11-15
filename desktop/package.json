@@ -1,0 +1,17 @@
+{
+  "name": "qwenr-tray",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows tray launcher for the qwenr router",
+  "author": "Stephen Phillips and HappyMonkeyAI",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11"
+  }
+}

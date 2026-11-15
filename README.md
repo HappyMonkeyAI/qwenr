@@ -85,7 +85,7 @@ Response headers: `x-qwenr-model`, `x-qwenr-lane` (`free` | `token_plan`), `x-qw
 
 ## How placement works
 
-1. **Free first** — among Singapore PAYG free-quota candidates (`free_models.yaml`), pick by role affinity. Near-ties within `free_affinity_slack` prefer underused free models so one id does not eat the day.
+1. **Free first** — among models a fresh `qwencloud` sync still shows with quota, pick by role affinity. Near-ties within `free_affinity_slack` prefer underused free models. No sync, a failed startup sync, or a sync older than `free_tier_sync_max_age_seconds` leaves the free lane empty. `token_plan_only: true` skips the PAYG key entirely.
 2. If free is empty/exhausted (or PAYG key missing), fall through to **Token Plan** allowlist scoring: `affinity − λ × effective Credit weight` (night / promo tables in `discounts.yaml`).
 3. Free-lane quota/billing errors mark that model exhausted (TTL) and retry toward Token Plan. With `payg_allow_paid: false` (default), qwenr never silently burns paid PAYG.
 
@@ -98,10 +98,10 @@ Before putting OpenBot on qwenr:
 1. **Keys** — `.env` has `sk-sp-` (Token Plan) and preferably `sk-ws-` (Singapore PAYG free lane). Never commit `.env` / `config.yaml`.
 2. **Port** — Drop-swap uses `:8787`; otherwise keep `:8788` while chimp owns 8787. Only one process should listen.
 3. **Free catalog** — Refresh `free_models.yaml` from the [Singapore free models](https://www.qwencloud.com/models?region=ap-southeast-1&free=1) list; ids must be exact.
-4. **Safety** — Leave `payg_allow_paid: false` unless you intentionally accept paid PAYG after free is gone.
+4. **Safety** — Leave `payg_allow_paid: false`. Set `token_plan_only: true` to never call the PAYG key. The free lane only uses models a fresh sync still lists with quota.
 5. **Health** — `GET /health` → ok; `GET /status` → both upstreams listed, `free_first: true`.
 6. **Smoke** — `auto:coord` plus `auto:coder` (and ideally `auto:qa`); confirm `x-qwenr-lane` and `/status` `summary`.
-7. **Quota eyes** — Install [QwenCloud CLI](https://docs.qwencloud.com/api-reference/preparation/cli) (`npm i -g @qwencloud/qwencloud-cli`) and run `qwencloud auth login` once. With `free_tier_sync: true` (default), qwenr calls `qwencloud usage free-tier` on startup / TTL refresh and skips **exhaust** / **expire** / zero-remaining free ids before calling them. `/status.free_tier_sync` shows the last sync. Also keep an eye on `/status` `summary` / `placement.ndjson`.
+7. **Quota eyes** — Install [QwenCloud CLI](https://docs.qwencloud.com/api-reference/preparation/cli) (`npm i -g @qwencloud/qwencloud-cli`) and run `qwencloud auth login` once. With `free_tier_sync: true` (default), qwenr calls `qwencloud usage free-tier` on startup and every TTL. Only ids that sync still shows with quota are called. If login expires or the sync is stale, the free lane closes and traffic goes to Token Plan. `/status.free_tier_sync` shows `allowed`, `blocked`, and `closed`.
 8. **ToS** — Token Plan is for **interactive** use inside programming/agent tools — not unattended batch/swarm scrapers. OpenBot as a human-driven harness is the intended shape.
 
 ### Operator notes
@@ -110,6 +110,16 @@ Before putting OpenBot on qwenr:
 - Night window **22:00–08:00 UTC+8**: e.g. `qwen3.8-max` / `qwen3.8-flash` often 60% off Credits; some DeepSeek ids 50% off (see `discounts.yaml`).
 - `qwen4-max-preview`: Token Plan only (not free-lane).
 - Free quota is Singapore-only, per-model, and separate from Token Plan Credits ([Free quota](https://docs.qwencloud.com/resources/free-quota)).
+
+## Tray
+
+A Windows tray shell lives in `desktop/`. It starts `python -m qwenr.server`, edits listen / Token Plan only / free-first / free-tier sync, and shows `/status`. API keys are written to `.env` only when you paste a new value; the window shows prefixes. Paid PAYG and a non-localhost bind each ask before they are saved. Restart the router after changing Token Plan only.
+
+```powershell
+cd desktop
+npm install
+npm start
+```
 
 ## Develop
 

@@ -38,6 +38,8 @@ class Settings:
     discounts: DiscountCatalog
     free_gate: FreeQuotaGate
     free_first: bool = True
+    # When true, never call the PAYG key. Free quota stays unused.
+    token_plan_only: bool = False
     # Safety default: never send PAYG once free quota is gone / unknown paid path.
     payg_allow_paid: bool = False
     sticky: bool = True
@@ -48,6 +50,7 @@ class Settings:
     ledger_path: Path | None = None
     free_tier_sync: bool = True
     free_tier_sync_ttl_seconds: float = 300.0
+    free_tier_sync_max_age_seconds: float = 900.0
     free_tier_sync_command: str = "qwencloud"
     free_tier_snapshot_path: Path | None = None
     config_path: Path | None = None
@@ -91,7 +94,12 @@ def load_settings(path: Path) -> Settings:
     discounts_path = _optional_path(data.get("discounts_path"), root) or (root / "discounts.yaml")
     free_path = _optional_path(data.get("free_models_path"), root) or (root / "free_models.yaml")
     ttl = float(data.get("free_exhausted_ttl_seconds") or 3600)
-    free_gate = FreeQuotaGate(eligible=load_free_models(free_path), ttl_seconds=ttl)
+    max_age = float(data.get("free_tier_sync_max_age_seconds") or 900)
+    free_gate = FreeQuotaGate(
+        eligible=load_free_models(free_path),
+        ttl_seconds=ttl,
+        max_age_seconds=max_age,
+    )
     return Settings(
         listen_host=host,
         listen_port=port,
@@ -102,6 +110,7 @@ def load_settings(path: Path) -> Settings:
         discounts=load_discounts(discounts_path),
         free_gate=free_gate,
         free_first=True if data.get("free_first") is None else bool(data.get("free_first")),
+        token_plan_only=bool(data.get("token_plan_only") or False),
         payg_allow_paid=bool(data.get("payg_allow_paid") or False),
         sticky=True if data.get("sticky") is None else bool(data.get("sticky")),
         sticky_ttl_seconds=float(data.get("sticky_ttl_seconds") or 1800),
@@ -111,6 +120,7 @@ def load_settings(path: Path) -> Settings:
         ledger_path=_optional_path(data.get("ledger_path") or "placement.ndjson", root),
         free_tier_sync=True if data.get("free_tier_sync") is None else bool(data.get("free_tier_sync")),
         free_tier_sync_ttl_seconds=float(data.get("free_tier_sync_ttl_seconds") or 300),
+        free_tier_sync_max_age_seconds=max_age,
         free_tier_sync_command=str(data.get("free_tier_sync_command") or "qwencloud").strip() or "qwencloud",
         free_tier_snapshot_path=_optional_path(data.get("free_tier_snapshot_path"), root),
         config_path=path,

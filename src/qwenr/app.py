@@ -38,8 +38,10 @@ def build_app(settings: Settings, client: httpx.AsyncClient | None = None) -> St
                 command=settings.free_tier_sync_command,
                 snapshot_path=settings.free_tier_snapshot_path,
             )
-            if not result.ok:
-                log.warning("free-tier sync failed at startup: %s", result.error)
+            if result.ok:
+                log.info("free-tier sync startup: allowed=%s blocked=%s", result.valid, sorted(result.blocked))
+            else:
+                log.warning("free-tier sync failed at startup; free lane closed: %s", result.error)
         try:
             yield
         finally:
@@ -69,6 +71,7 @@ async def status(request: Request) -> JSONResponse:
             "token_plan": settings.token_plan.base_url,
             "payg": settings.payg.base_url if settings.payg else None,
             "free_first": settings.free_first,
+            "token_plan_only": settings.token_plan_only,
             "payg_allow_paid": settings.payg_allow_paid,
             "free_affinity_slack": settings.free_affinity_slack,
             # Only models the free lane can actually attempt (needs PAYG key).
@@ -248,12 +251,12 @@ async def chat(request: Request) -> Response:
 
 
 def _free_candidates(settings: Settings) -> tuple[str, ...]:
-    if not settings.free_first:
+    if settings.token_plan_only or not settings.free_first:
         return ()
     if settings.payg is None or not settings.payg.api_key:
         return ()
     _maybe_refresh_free_tier(settings)
-    # Without payg_allow_paid we only ever hit PAYG for free lane — good.
+    # Allow-list only. A missing or stale sync leaves this empty so PAYG is not called.
     return settings.free_gate.available()
 
 
@@ -270,7 +273,7 @@ def _maybe_refresh_free_tier(settings: Settings) -> None:
         snapshot_path=settings.free_tier_snapshot_path,
     )
     if not result.ok:
-        log.warning("free-tier sync refresh failed: %s", result.error)
+        log.warning("free-tier sync refresh failed; free lane stays on the last fresh allow-list: %s", result.error)
 
 
 def _upstream_for(settings: Settings, placement: Placement) -> UpstreamConfig | None:

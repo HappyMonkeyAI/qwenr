@@ -26,24 +26,36 @@ QUOTA_EXHAUSTED_MARKERS = (
 
 @dataclass
 class FreeQuotaGate:
-    """In-memory exhausted set + optional live free-tier sync blocks."""
+    """Free lane is an allow-list from the last fresh sync. No sync means no PAYG calls."""
 
     eligible: frozenset[str]
     ttl_seconds: float = 3600.0
+    max_age_seconds: float = 900.0
     _exhausted_until: dict[str, float] = field(default_factory=dict)
     # model_id -> reason from last successful free-tier sync (exhaust/expire/…).
     _sync_blocked: dict[str, str] = field(default_factory=dict)
+    # None until a sync succeeds. Models missing from that sync stay off the free lane.
+    _sync_allowed: frozenset[str] | None = None
     _sync_at: float | None = None
     _sync_source: str | None = None
     _sync_error: str | None = None
 
     def available(self) -> tuple[str, ...]:
+        if self.closed_reason() is not None or self._sync_allowed is None:
+            return ()
         now = time.time()
         return tuple(
             mid
-            for mid in sorted(self.eligible)
-            if mid not in self._sync_blocked and self._exhausted_until.get(mid, 0) <= now
+            for mid in sorted(self._sync_allowed)
+            if self._exhausted_until.get(mid, 0) <= now
         )
+
+    def closed_reason(self) -> str | None:
+        if self._sync_at is None or self._sync_allowed is None:
+            return "no_sync"
+        if (time.time() - self._sync_at) > self.max_age_seconds:
+            return "stale"
+        return None
 
     def mark_exhausted(self, model_id: str) -> None:
         self._exhausted_until[model_id] = time.time() + self.ttl_seconds
@@ -53,9 +65,20 @@ class FreeQuotaGate:
             return True
         return self._exhausted_until.get(model_id, 0) > time.time()
 
-    def apply_sync_blocks(self, blocked: dict[str, str], *, source: str | None = None) -> None:
-        """Replace sync-derived blocks. Reactive TTL marks are left alone."""
-        self._sync_blocked = dict(blocked)
+    def apply_sync_blocks(
+        self,
+        blocked: dict[str, str],
+        *,
+        allowed: set[str] | frozenset[str] | None = None,
+        source: str | None = None,
+    ) -> None:
+        """Replace the allow-list. Only ids the sync left unblocked may use the PAYG key."""
+        blocked_ids = {mid: reason for mid, reason in blocked.items() if mid in self.eligible}
+        self._sync_blocked = blocked_ids
+        permitted = set(allowed or ())
+        self._sync_allowed = frozenset(
+            mid for mid in permitted if mid in self.eligible and mid not in blocked_ids
+        )
         self._sync_at = time.time()
         self._sync_source = source
         self._sync_error = None
@@ -63,14 +86,16 @@ class FreeQuotaGate:
     def note_sync_error(self, error: str, *, source: str | None = None) -> None:
         self._sync_error = error
         self._sync_source = source
-        # Keep previous blocks on failure so a blip doesn't reopen paid risk.
+        # Keep the previous allow-list. A failed refresh must not reopen the catalog.
 
     def sync_status(self) -> dict[str, object]:
         return {
             "blocked": dict(self._sync_blocked),
+            "allowed": sorted(self._sync_allowed or ()),
             "synced_at": self._sync_at,
             "source": self._sync_source,
             "error": self._sync_error,
+            "closed": self.closed_reason(),
         }
 
 

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>qwenr</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Segoe UI", sans-serif; }
+    body { margin: 0; background: #14181c; color: #e7ece8; }
+    main { padding: 16px 18px 20px; display: grid; gap: 12px; }
+    h1 { margin: 0; font-size: 18px; font-weight: 650; }
+    p { margin: 0; color: #9aa59e; font-size: 12px; line-height: 1.4; }
+    label { display: grid; gap: 4px; font-size: 12px; color: #c5d0c8; }
+    input[type="text"], input[type="number"], input[type="password"] {
+      background: #0e1215; color: #f3f7f4; border: 1px solid #2c3832; border-radius: 6px; padding: 7px 8px;
+    }
+    .row { display: grid; grid-template-columns: 1fr 110px; gap: 8px; }
+    .checks { display: grid; gap: 6px; }
+    .checks label { display: flex; gap: 8px; align-items: center; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    button {
+      background: #1d6b45; color: white; border: 0; border-radius: 6px; padding: 8px 12px; cursor: pointer;
+    }
+    button.ghost { background: #24302a; }
+    button.warn { background: #8a3d2f; }
+    #status { white-space: pre-wrap; background: #0e1215; border-radius: 8px; padding: 10px; min-height: 92px; font-size: 12px; }
+    .danger { color: #f0b4a8; }
+  </style>
+</head>
+<body>
+  <main>
+    <div>
+      <h1>qwenr</h1>
+      <p id="headline">Router tray. Keys stay in .env and are shown as prefixes.</p>
+    </div>
+    <div class="row">
+      <label>Listen host
+        <input id="host" type="text" spellcheck="false" />
+      </label>
+      <label>Port
+        <input id="port" type="number" min="1" max="65535" />
+      </label>
+    </div>
+    <div class="checks">
+      <label><input id="tokenPlanOnly" type="checkbox" /> Token Plan only</label>
+      <p>Never call the PAYG key. Restart the router after saving.</p>
+      <label><input id="freeFirst" type="checkbox" /> Free quota before Token Plan</label>
+      <label><input id="freeSync" type="checkbox" /> Sync free tier with qwencloud</label>
+      <label class="danger"><input id="paid" type="checkbox" /> Allow paid PAYG after free is gone</label>
+      <label><input id="login" type="checkbox" /> Start tray with Windows</label>
+    </div>
+    <label>Token Plan key <span id="tokenPrefix"></span>
+      <input id="tokenKey" type="password" placeholder="leave blank to keep current" autocomplete="off" />
+    </label>
+    <label>PAYG free-lane key <span id="paygPrefix"></span>
+      <input id="paygKey" type="password" placeholder="leave blank to keep current" autocomplete="off" />
+    </label>
+    <div class="actions">
+      <button id="save" type="button">Save</button>
+      <button id="start" class="ghost" type="button">Start</button>
+      <button id="stop" class="ghost" type="button">Stop</button>
+      <button id="restart" class="warn" type="button">Restart</button>
+    </div>
+    <div id="status">Loading…</div>
+  </main>
+  <script src="settings.js"></script>
+</body>
+</html>

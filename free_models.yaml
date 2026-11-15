@@ -1,7 +1,8 @@
 # Singapore PAYG free-quota candidates (marketplace ?free=1 text/chat slice).
-# qwenr only uses these on the PAYG upstream while free_first is on AND the
-# model is not marked exhausted. Exhausted → Token Plan. Never silent PAYG paid
-# unless payg_allow_paid: true (default false).
+# qwenr only calls these on the PAYG key when free_first is on, token_plan_only
+# is off, AND a fresh free-tier sync still lists the id with remaining quota.
+# Anything else goes to Token Plan. Never silent PAYG paid unless
+# payg_allow_paid: true (default false).
 #
 # Refresh from https://www.qwencloud.com/models?region=ap-southeast-1&free=1
 # and console Free Tier remaining balances. Exact ids only.

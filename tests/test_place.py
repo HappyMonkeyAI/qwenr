@@ -109,3 +109,20 @@ def test_free_slack_zero_stays_greedy():
     )
     assert chosen.model_id == "qwen3.8-max-0902"
     assert chosen.reason == "free_quota"
+
+
+def test_exact_model_id_not_remapped_by_free_spread():
+    aff = load_affinity()
+    disc = load_discounts()
+    chosen = place(
+        "qwen3.8-max",
+        aff,
+        disc,
+        free_first=True,
+        free_candidates=("kimi-k3", "kimi-k3.1-pro", "qwen3.8-max", "qwen3.8-flash"),
+        free_affinity_slack=3,
+        free_usage={"qwen3.8-max": 99, "kimi-k3": 0},
+    )
+    assert chosen.model_id == "qwen3.8-max"
+    assert chosen.lane == "free"
+    assert chosen.reason == "exact_free"
