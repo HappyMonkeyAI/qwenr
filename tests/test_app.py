@@ -467,3 +467,19 @@ def test_status_says_why_free_lane_is_closed():
     assert "PAYG key" in closed
     with TestClient(build_app(make_settings(free={"best"}), client=upstream()[0])) as client:
         assert client.get("/status").json()["free_lane_closed"] is None
+
+
+def test_free_placement_without_payg_key_fails_closed_without_marking(monkeypatch):
+    # Can't happen via config (no key -> no free candidates); force it to prove
+    # the guard fails closed, names the right key, and leaves the gate alone.
+    monkeypatch.setattr(app_module, "_free_candidates", lambda s: ("best",))
+    http, calls = upstream()
+    settings = make_settings(free={"best"}, payg=NO_KEY)
+    with TestClient(build_app(settings, client=http)) as client:
+        resp = chat(client, "auto:coord")
+    assert resp.status_code == 503
+    err = resp.json()["error"]
+    assert err["code"] == "upstream_unconfigured"
+    assert "QWEN_PAYG_API_KEY" in err["message"]
+    assert calls == []
+    assert settings.free_gate._exhausted_until == {}

@@ -195,30 +195,14 @@ async def chat(request: Request) -> Response:
 
         upstream = _upstream_for(settings, placement)
         if upstream is None or not upstream.api_key:
-            if placement.lane == "free":
-                # Cannot safely use free lane without PAYG key — skip to Token Plan.
-                settings.free_gate.mark_exhausted(placement.model_id)
-                free_exclude.add(placement.model_id)
-                await ledger.arecord(
-                    {
-                        "event": "failover",
-                        "ok": False,
-                        "requested": placement.requested,
-                        "model": placement.model_id,
-                        "lane": placement.lane,
-                        "reason": "no_payg_key",
-                        "affinity": placement.affinity,
-                        "attempt": attempt,
-                    }
-                )
-                log.warning("free lane skipped (no PAYG key); falling through to Token Plan")
-                continue
-            return _error(
-                503,
-                "upstream_unconfigured",
-                "Set token_plan.api_key / QWEN_TOKEN_PLAN_API_KEY (sk-sp-).",
-                headers=_placement_headers(placement),
+            # Free placements require a PAYG key (_free_candidates is empty without
+            # one), so reaching this on the free lane is a bug: fail closed.
+            hint = (
+                "Set payg.api_key / QWEN_PAYG_API_KEY (sk-ws-)."
+                if placement.lane == "free"
+                else "Set token_plan.api_key / QWEN_TOKEN_PLAN_API_KEY (sk-sp-)."
             )
+            return _error(503, "upstream_unconfigured", hint, headers=_placement_headers(placement))
 
         # Hard safety: never use PAYG for non-free placements unless explicitly allowed.
         if placement.lane != "free" and upstream is settings.payg and not settings.payg_allow_paid:
