@@ -346,3 +346,27 @@ def test_streaming_free_quota_block_fails_over_to_token_plan():
     assert resp.status_code == 200
     assert resp.headers["x-qwenr-lane"] == "token_plan"
     assert calls == [("payg", "best"), ("token_plan", "best")]
+
+
+# --- Follow-up: Content-Length must be ASCII decimal digits -----------------
+
+
+def _stub_request(content_length: str, body: bytes):
+    async def stream():
+        yield body
+
+    return SimpleNamespace(headers={"content-length": content_length}, stream=stream)
+
+
+@pytest.mark.parametrize("declared", ["²00", "\u0663\u0660\u0660\u0660"])  # superscript; Arabic-Indic 3000
+async def test_non_ascii_content_length_is_ignored_not_trusted(declared: str):
+    body = b'{"model":"auto"}'
+    assert await app_module._read_body_limited(_stub_request(declared, body), 200) == body
+
+
+async def test_non_ascii_content_length_still_enforces_streamed_limit():
+    assert await app_module._read_body_limited(_stub_request("²", b"x" * 500), 200) is None
+
+
+async def test_ascii_content_length_over_limit_rejected_before_reading():
+    assert await app_module._read_body_limited(_stub_request("500", b""), 200) is None
