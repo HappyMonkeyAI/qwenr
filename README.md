@@ -75,7 +75,9 @@ curl -s http://127.0.0.1:8788/v1/chat/completions \
 
 Response headers: `x-qwenr-model`, `x-qwenr-lane` (`free` | `token_plan`), `x-qwenr-reason`, `x-qwenr-affinity`, `x-qwenr-cost`.
 
-`/status` includes a placement **summary** and recent decisions. Successful calls append to `placement.ndjson` (gitignored) for post-run quota analysis.
+`/status` includes a placement **summary** and recent decisions, plus `free_lane_closed`: why the free lane is unusable (e.g. `no PAYG key`, `free-tier sync is stale`), or `null` when it is open. Successful calls append to `placement.ndjson` (gitignored) for post-run quota analysis.
+
+Without a PAYG key, qwenr never calls PAYG and skips the `qwencloud` sync. Role requests go to Token Plan. Requesting a model that exists only in `free_models.yaml` returns `503 free_lane_unavailable` with the reason, rather than a bare 404.
 
 ## OpenBot drop-swap
 

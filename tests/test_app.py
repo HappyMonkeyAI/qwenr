@@ -370,3 +370,100 @@ async def test_non_ascii_content_length_still_enforces_streamed_limit():
 
 async def test_ascii_content_length_over_limit_rejected_before_reading():
     assert await app_module._read_body_limited(_stub_request("500", b""), 200) is None
+
+
+# --- No-PAYG-key behaviour --------------------------------------------------
+
+FREE_ONLY_AFFINITY = AffinityCatalog(scores={"best": {"auto": 95}})  # "freeonly" is not a Token Plan id
+NO_KEY = UpstreamConfig(base_url=PAYG, api_key=None)
+
+
+def _free_only_settings(**overrides):
+    base = dict(affinity=FREE_ONLY_AFFINITY, eligible={"best", "freeonly"}, free={"best", "freeonly"})
+    base.update(overrides)
+    return make_settings(**base)
+
+
+def test_free_only_model_without_payg_key_explains_why():
+    http, calls = upstream()
+    with TestClient(build_app(_free_only_settings(payg=NO_KEY), client=http)) as client:
+        resp = chat(client, "freeonly")
+    assert resp.status_code == 503
+    err = resp.json()["error"]
+    assert err["code"] == "free_lane_unavailable"
+    assert "PAYG key" in err["message"]
+    assert calls == []
+
+
+def test_free_only_model_with_quota_gone_explains_why():
+    http, calls = upstream()
+    with TestClient(build_app(_free_only_settings(free={"best"}), client=http)) as client:
+        resp = chat(client, "freeonly")
+    assert resp.status_code == 503
+    assert "quota" in resp.json()["error"]["message"]
+    assert calls == []
+
+
+def test_free_only_model_with_open_free_lane_is_served_free():
+    http, calls = upstream()
+    with TestClient(build_app(_free_only_settings(), client=http)) as client:
+        resp = chat(client, "freeonly")
+    assert resp.status_code == 200
+    assert resp.headers["x-qwenr-lane"] == "free"
+    assert calls == [("payg", "freeonly")]
+
+
+def test_truly_unknown_model_is_still_404():
+    http, _ = upstream()
+    with TestClient(build_app(_free_only_settings(payg=NO_KEY), client=http)) as client:
+        resp = chat(client, "nope")
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "model_not_found"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"payg": NO_KEY}, {"payg": None}, {"token_plan_only": True}, {"free_first": False}],
+    ids=["no-key", "no-payg-block", "token-plan-only", "free-first-off"],
+)
+def test_startup_sync_skipped_when_free_lane_cannot_be_used(monkeypatch, overrides):
+    calls: list[int] = []
+    monkeypatch.setattr(app_module, "sync_free_tier", lambda gate, **kw: calls.append(1))
+    http, _ = upstream()
+    with TestClient(build_app(make_settings(free_tier_sync=True, **overrides), client=http)) as client:
+        chat(client, "auto")
+    assert calls == []
+
+
+def test_startup_sync_runs_when_free_lane_usable(monkeypatch):
+    calls: list[int] = []
+
+    def fake(gate, **kw):
+        calls.append(1)
+        gate.apply_sync_blocks({}, allowed={"best"}, source="fake")
+        return FreeTierSyncResult(ok=True, source="fake", valid=["best"])
+
+    monkeypatch.setattr(app_module, "sync_free_tier", fake)
+    http, _ = upstream()
+    with TestClient(build_app(make_settings(free_tier_sync=True), client=http)):
+        pass
+    assert calls == [1]
+
+
+def test_models_owner_reflects_routable_lane():
+    http, _ = upstream()
+    with TestClient(build_app(make_settings(free={"best"}, payg=NO_KEY), client=http)) as client:
+        owners = {m["id"]: m["owned_by"] for m in client.get("/v1/models").json()["data"]}
+    assert owners["best"] == "token-plan"
+    with TestClient(build_app(make_settings(free={"best"}), client=upstream()[0])) as client:
+        owners = {m["id"]: m["owned_by"] for m in client.get("/v1/models").json()["data"]}
+    assert owners["best"] == "free-quota"
+
+
+def test_status_says_why_free_lane_is_closed():
+    http, _ = upstream()
+    with TestClient(build_app(make_settings(free={"best"}, payg=NO_KEY), client=http)) as client:
+        closed = client.get("/status").json()["free_lane_closed"]
+    assert "PAYG key" in closed
+    with TestClient(build_app(make_settings(free={"best"}), client=upstream()[0])) as client:
+        assert client.get("/status").json()["free_lane_closed"] is None

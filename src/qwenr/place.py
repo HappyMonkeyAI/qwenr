@@ -256,3 +256,8 @@ def _canonical_id(model_id: str, known: set[str]) -> str:
         if len(matches) == 1:
             return matches[0]
     return model_id
+
+
+def resolve_model_id(requested: str | None, known: set[str] | frozenset[str]) -> str:
+    """Normalize a requested id and resolve it against `known` (same rules as placement)."""
+    return _canonical_id(_normalize_role(requested), set(known))
