@@ -243,8 +243,16 @@ def _exact_model(
 
 
 def _canonical_id(model_id: str, known: set[str]) -> str:
-    """Exact match first, then a unique case-insensitive match; else unchanged."""
-    if model_id in known:
-        return model_id
-    matches = [mid for mid in known if mid.casefold() == model_id.casefold()]
-    return matches[0] if len(matches) == 1 else model_id
+    """Resolve a requested id to a catalog id; unchanged if nothing matches.
+
+    Order: exact, unique case-insensitive, then the same for the last path
+    segment so provider-prefixed ids ("openai/qwen3.8-max") still route. The
+    full id is tried first, so a vendor-scoped catalog id always wins.
+    """
+    for candidate in dict.fromkeys((model_id, model_id.rsplit("/", 1)[-1])):
+        if candidate in known:
+            return candidate
+        matches = [mid for mid in known if mid.casefold() == candidate.casefold()]
+        if len(matches) == 1:
+            return matches[0]
+    return model_id

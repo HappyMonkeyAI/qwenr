@@ -160,3 +160,30 @@ def test_matched_quota_marker_names_the_marker():
     assert matched_quota_marker(401, b"Access denied: invalid key") == "access denied"
     assert matched_quota_marker(500, b"free quota") is None
     assert matched_quota_marker(429, b"slow down") is None
+
+
+def test_provider_prefixed_id_falls_back_to_last_segment():
+    aff, disc = load_affinity(), load_discounts()
+    chosen = place("openai/Qwen3.8-Max", aff, disc, free_first=False)
+    assert chosen.model_id == "qwen3.8-max"
+    assert chosen.requested == "qwen3.8-max"
+
+
+def test_full_vendor_id_wins_over_last_segment():
+    aff = AffinityCatalog(scores={"moonshotai/kimi-k3": {"auto": 80}, "kimi-k3": {"auto": 70}})
+    assert place("moonshotai/kimi-k3", aff, load_discounts(), free_first=False).model_id == "moonshotai/kimi-k3"
+
+
+def test_provider_prefixed_free_id_still_uses_free_lane():
+    aff, disc = load_affinity(), load_discounts()
+    chosen = place("openai/qwen3.8-flash", aff, disc, free_candidates=("qwen3.8-flash",))
+    assert (chosen.model_id, chosen.lane) == ("qwen3.8-flash", "free")
+
+
+def test_unknown_prefixed_id_is_still_404():
+    import pytest
+    from qwenr.place import PlaceError
+
+    with pytest.raises(PlaceError) as exc:
+        place("openai/gpt-9", load_affinity(), load_discounts(), free_first=False)
+    assert exc.value.status == 404 and "openai/gpt-9" in exc.value.message
