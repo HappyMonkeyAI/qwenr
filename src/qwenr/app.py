@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import hmac
 import json
 import logging
 import time
@@ -10,9 +12,11 @@ from typing import Any
 
 import httpx
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from qwenr import __version__
 from qwenr.config import Settings, UpstreamConfig
@@ -32,12 +36,9 @@ def build_app(settings: Settings, client: httpx.AsyncClient | None = None) -> St
         app.state.settings = settings
         app.state.client = http
         app.state.ledger = PlacementLedger(path=settings.ledger_path)
+        app.state.sync_lock = asyncio.Lock()
         if settings.free_tier_sync:
-            result = sync_free_tier(
-                settings.free_gate,
-                command=settings.free_tier_sync_command,
-                snapshot_path=settings.free_tier_snapshot_path,
-            )
+            result = await asyncio.to_thread(_run_free_tier_sync, settings)
             if result.ok:
                 log.info("free-tier sync startup: allowed=%s blocked=%s", result.valid, sorted(result.blocked))
             else:
@@ -54,7 +55,29 @@ def build_app(settings: Settings, client: httpx.AsyncClient | None = None) -> St
         Route("/v1/models", models),
         Route("/v1/chat/completions", chat, methods=["POST"]),
     ]
-    return Starlette(routes=routes, lifespan=lifespan)
+    middleware = [Middleware(BearerAuth, key=settings.api_key)]
+    return Starlette(routes=routes, lifespan=lifespan, middleware=middleware)
+
+
+class BearerAuth:
+    """Require `Authorization: Bearer <api_key>` on everything but /health when a key is set."""
+
+    def __init__(self, app: ASGIApp, key: str | None) -> None:
+        self.app = app
+        self.key = key.encode() if key else None
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if self.key is None or scope["type"] != "http" or scope["path"] == "/health":
+            await self.app(scope, receive, send)
+            return
+        auth = dict(scope["headers"]).get(b"authorization", b"")
+        scheme, _, token = auth.partition(b" ")
+        if scheme.lower() != b"bearer" or not hmac.compare_digest(token.strip(), self.key):
+            response = _error(401, "unauthorized", "Missing or invalid API key.")
+            response.headers["www-authenticate"] = "Bearer"
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 async def health(request: Request) -> JSONResponse:
@@ -109,12 +132,15 @@ async def chat(request: Request) -> Response:
         return _error(400, "invalid_json", "Request body must be a JSON object.")
 
     requested = payload.get("model")
-    exclude: set[str] = set()
+    # Free-lane failures only remove a model from the free lane; the same id may
+    # still be the right Token Plan pick.
+    free_exclude: set[str] = set()
     last_error: Response | None = None
     attempt = 0
 
+    await _maybe_refresh_free_tier(request.app)
     for attempt in range(4):
-        free_candidates = _free_candidates(settings)
+        free_candidates = tuple(m for m in _free_candidates(settings) if m not in free_exclude)
         try:
             placement = place(
                 str(requested) if requested is not None else None,
@@ -124,7 +150,7 @@ async def chat(request: Request) -> Response:
                 prefer_platform_auto=settings.token_plan.prefer_platform_auto,
                 free_candidates=free_candidates,
                 free_first=settings.free_first and bool(free_candidates),
-                exclude=frozenset(exclude),
+                exclude=frozenset(),
                 free_affinity_slack=settings.free_affinity_slack,
                 free_usage=ledger.free_usage_counts(),
             )
@@ -148,7 +174,7 @@ async def chat(request: Request) -> Response:
             if placement.lane == "free":
                 # Cannot safely use free lane without PAYG key — skip to Token Plan.
                 settings.free_gate.mark_exhausted(placement.model_id)
-                exclude.add(placement.model_id)
+                free_exclude.add(placement.model_id)
                 ledger.record(
                     {
                         "event": "failover",
@@ -209,7 +235,7 @@ async def chat(request: Request) -> Response:
         raw = getattr(response, "body", b"") or b""
         if placement.lane == "free" and looks_like_quota_or_billing_block(response.status_code, raw):
             settings.free_gate.mark_exhausted(placement.model_id)
-            exclude.add(placement.model_id)
+            free_exclude.add(placement.model_id)
             last_error = response
             ledger.record(
                 {
@@ -255,23 +281,35 @@ def _free_candidates(settings: Settings) -> tuple[str, ...]:
         return ()
     if settings.payg is None or not settings.payg.api_key:
         return ()
-    _maybe_refresh_free_tier(settings)
     # Allow-list only. A missing or stale sync leaves this empty so PAYG is not called.
     return settings.free_gate.available()
 
 
-def _maybe_refresh_free_tier(settings: Settings) -> None:
-    if not settings.free_tier_sync:
-        return
-    meta = settings.free_gate.sync_status()
-    synced_at = meta.get("synced_at")
-    if isinstance(synced_at, (int, float)) and (time.time() - float(synced_at)) < settings.free_tier_sync_ttl_seconds:
-        return
-    result = sync_free_tier(
+def _run_free_tier_sync(settings: Settings):
+    return sync_free_tier(
         settings.free_gate,
         command=settings.free_tier_sync_command,
         snapshot_path=settings.free_tier_snapshot_path,
     )
+
+
+async def _maybe_refresh_free_tier(app: Starlette) -> None:
+    """Refresh at most once per TTL (success or failure), off the event loop, one at a time."""
+    settings: Settings = app.state.settings
+    gate = settings.free_gate
+    if not settings.free_tier_sync or settings.token_plan_only or not settings.free_first:
+        return
+    if settings.payg is None or not settings.payg.api_key:
+        return
+    if not gate.refresh_due(settings.free_tier_sync_ttl_seconds):
+        return
+    lock: asyncio.Lock = app.state.sync_lock
+    if lock.locked():
+        return  # another request is refreshing; use the current allow-list
+    async with lock:
+        if not gate.refresh_due(settings.free_tier_sync_ttl_seconds):
+            return
+        result = await asyncio.to_thread(_run_free_tier_sync, settings)
     if not result.ok:
         log.warning("free-tier sync refresh failed; free lane stays on the last fresh allow-list: %s", result.error)
 

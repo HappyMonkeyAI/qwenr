@@ -38,6 +38,7 @@ QWEN_PAYG_API_KEY=sk-ws-...
 - **Token Plan** keys start with `sk-sp-` (Credits).
 - **PAYG** keys for the Singapore free-quota lane are typically `sk-ws-`.
 - Optional URL overrides: `QWEN_TOKEN_PLAN_BASE_URL`, `QWEN_PAYG_BASE_URL` (see `.env.example`).
+- Optional `QWENR_API_KEY`: when set, every route except `/health` requires `Authorization: Bearer <key>`. It is **required** for any non-loopback `listen` (e.g. `0.0.0.0`) — qwenr refuses to start without it, since anyone reaching the port could otherwise spend your Credits.
 
 `config.yaml` is gitignored — only `config.example.yaml` ships in the public tree. Secrets stay in `.env` or process env (process env wins if already set).
 

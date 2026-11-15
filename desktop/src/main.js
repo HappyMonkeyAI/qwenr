@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadOperatorView, saveOperatorSettings } from "./config-store.js";
+import { loadOperatorView, readRouterApiKey, saveOperatorSettings } from "./config-store.js";
 import { RouterProcess } from "./router-process.js";
 
 const desktopDir = path.dirname(fileURLToPath(import.meta.url));
@@ -53,10 +53,13 @@ function probeHost(settings) {
 async function liveStatus() {
   const settings = loadOperatorView(root);
   const base = `http://${probeHost(settings)}:${settings.listenPort}`;
+  const key = readRouterApiKey(root);
+  const headers = key ? { authorization: `Bearer ${key}` } : {};
   try {
     const healthResponse = await fetch(`${base}/health`);
     const health = await healthResponse.json();
-    const statusResponse = await fetch(`${base}/status`);
+    const statusResponse = await fetch(`${base}/status`, { headers });
+    if (!statusResponse.ok) return { health, error: `status ${statusResponse.status}` };
     const status = await statusResponse.json();
     return { health, status };
   } catch (error) {
@@ -171,6 +174,7 @@ ipcMain.handle("qwenr:save", async (event, patch) => {
       cancelId: 0,
       title: "Network",
       message: "Binding 0.0.0.0 exposes the router beyond this PC.",
+      detail: "The router will refuse to start unless QWENR_API_KEY is set in .env; callers must then send 'Authorization: Bearer <key>'.",
     });
     if (answer.response !== 1) return { error: "Kept listen on localhost." };
     patch = { ...patch, allowLan: true };

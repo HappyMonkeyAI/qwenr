@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 from dataclasses import dataclass
@@ -87,6 +88,12 @@ def load_settings(path: Path) -> Settings:
     data = expand_env(raw)
     assert isinstance(data, dict)
     host, port = _parse_listen(str(data.get("listen") or "127.0.0.1:8788"))
+    api_key = _blank(data.get("api_key"))
+    if not api_key and not _is_loopback(host):
+        raise ConfigError(
+            f"listen {host}:{port} is reachable beyond this machine; set api_key (QWENR_API_KEY) "
+            "so callers must send 'Authorization: Bearer <key>'."
+        )
     token_plan = _parse_token_plan(data)
     payg = _parse_payg(data)
     root = path.parent
@@ -103,7 +110,7 @@ def load_settings(path: Path) -> Settings:
     return Settings(
         listen_host=host,
         listen_port=port,
-        api_key=_blank(data.get("api_key")),
+        api_key=api_key,
         token_plan=token_plan,
         payg=payg,
         affinity=load_affinity(models_path),
@@ -163,6 +170,16 @@ def _parse_listen(value: str) -> tuple[str, int]:
     if not sep:
         raise ConfigError(f"listen must look like 127.0.0.1:8788, got {value!r}.")
     return host or "127.0.0.1", int(port)
+
+
+def _is_loopback(host: str) -> bool:
+    name = host.strip().strip("[]")
+    if name.casefold() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
 
 
 def _blank(value: object) -> str | None:

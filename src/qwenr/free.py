@@ -39,6 +39,13 @@ class FreeQuotaGate:
     _sync_at: float | None = None
     _sync_source: str | None = None
     _sync_error: str | None = None
+    # Last sync attempt, success or failure. Failed refreshes back off on this.
+    _sync_attempt_at: float | None = None
+
+    def refresh_due(self, ttl_seconds: float, now: float | None = None) -> bool:
+        if self._sync_attempt_at is None:
+            return True
+        return ((now or time.time()) - self._sync_attempt_at) >= ttl_seconds
 
     def available(self) -> tuple[str, ...]:
         if self.closed_reason() is not None or self._sync_allowed is None:
@@ -80,12 +87,14 @@ class FreeQuotaGate:
             mid for mid in permitted if mid in self.eligible and mid not in blocked_ids
         )
         self._sync_at = time.time()
+        self._sync_attempt_at = self._sync_at
         self._sync_source = source
         self._sync_error = None
 
     def note_sync_error(self, error: str, *, source: str | None = None) -> None:
         self._sync_error = error
         self._sync_source = source
+        self._sync_attempt_at = time.time()
         # Keep the previous allow-list. A failed refresh must not reopen the catalog.
 
     def sync_status(self) -> dict[str, object]:

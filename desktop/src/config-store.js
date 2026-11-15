@@ -80,6 +80,13 @@ export function isReplacementKey(value) {
   return text.length >= 12;
 }
 
+// Main-process only: never include this in loadOperatorView (it reaches the renderer).
+export function readRouterApiKey(root) {
+  const envPath = path.join(root, ".env");
+  const fromFile = fs.existsSync(envPath) ? parseEnv(fs.readFileSync(envPath, "utf8")).QWENR_API_KEY : "";
+  return String(process.env.QWENR_API_KEY || fromFile || "").replace(/^["']|["']$/g, "").trim();
+}
+
 export function loadOperatorView(root) {
   const configPath = path.join(root, "config.yaml");
   const examplePath = path.join(root, "config.example.yaml");
