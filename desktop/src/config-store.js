@@ -3,6 +3,11 @@ import path from "node:path";
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost"]);
 
+// Keys are matched literally; "a.b" must not match "aXb".
+export function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export function repoRootFromDesktop(desktopDir) {
   return path.resolve(desktopDir, "..");
 }
@@ -35,14 +40,14 @@ export function assertListenAllowed(host, port, { allowLan = false } = {}) {
 }
 
 export function readScalar(text, key) {
-  const match = new RegExp(`^${key}:\\s*(.*)$`, "m").exec(text);
+  const match = new RegExp(`^${escapeRegExp(key)}:\\s*(.*)$`, "m").exec(text);
   if (!match) return "";
   return match[1].trim().replace(/^["']|["']$/g, "");
 }
 
 export function setScalar(text, key, value) {
   const line = `${key}: ${value}`;
-  const pattern = new RegExp(`^${key}:.*$`, "m");
+  const pattern = new RegExp(`^${escapeRegExp(key)}:.*$`, "m");
   // Function replacement: a string would interpret $&, $' and $` in the value.
   if (pattern.test(text)) return text.replace(pattern, () => line);
   return `${line}\n${text}`;
@@ -61,7 +66,7 @@ export function parseEnv(text) {
 
 export function upsertEnv(text, key, value) {
   const line = `${key}=${value}`;
-  const pattern = new RegExp(`^${key}=.*$`, "m");
+  const pattern = new RegExp(`^${escapeRegExp(key)}=.*$`, "m");
   if (pattern.test(text)) return text.replace(pattern, () => line);
   const base = String(text || "");
   const sep = base.endsWith("\n") || base.length === 0 ? "" : "\n";

@@ -129,3 +129,13 @@ test("stop resolves only after the child exits; restart waits for it", async () 
   assert.equal(calls.length, 3);
   assert.equal(router.owned, true);
 });
+
+// --- Follow-up: keys are matched literally, not as regex -------------------
+
+test("setScalar/readScalar/upsertEnv treat the key literally", async () => {
+  const { readScalar } = await import("../src/config-store.js");
+  assert.equal(setScalar("aXb: 1\n", "a.b", "2"), "a.b: 2\naXb: 1\n");
+  assert.equal(readScalar("aXb: 1\n", "a.b"), "");
+  assert.equal(upsertEnv("AXB=1\n", "A.B", "2"), "AXB=1\nA.B=2\n");
+  assert.equal(upsertEnv("K+=1\n", "K+", "2"), "K+=2\n");
+});

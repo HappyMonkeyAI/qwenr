@@ -293,7 +293,10 @@ async def chat(request: Request) -> Response:
 async def _read_body_limited(request: Request, limit: int) -> bytes | None:
     """Read the request body, or None if it exceeds `limit` bytes (checked before buffering)."""
     declared = request.headers.get("content-length")
-    if declared is not None and declared.isdigit() and int(declared) > limit:
+    # isascii(): str.isdigit() also accepts "²" (int() then raises) and
+    # Arabic-Indic digits. Only plain ASCII decimals are trusted; anything else
+    # falls through to the streamed byte count below.
+    if declared is not None and declared.isascii() and declared.isdigit() and int(declared) > limit:
         return None
     chunks: list[bytes] = []
     size = 0
